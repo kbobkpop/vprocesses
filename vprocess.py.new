@@ -1,0 +1,64 @@
+import multiprocessing
+import graphviz
+
+#Notes:
+#1. Initialize VDigraph with a path.
+#2. Consider how to visualize. What are the roles of edges and nodes?
+#3. Consider general structure in a UML-kinda-way. What has what and what is responsible for what, eg. updating the graph/visulization.
+#4. There are race conditions if not using time.sleep() in between calls to draw.
+#5. Create logging system
+
+class VDigraph(graphviz.Digraph):
+    iterator = 0
+
+    def draw(self, path):
+        iteratedpath = path + str(self.iterator) + '.gv'
+        super().render(iteratedpath)
+        self.iterator = self.iterator + 1
+
+
+class VProcess(multiprocessing.Process):
+    def __init__(self, dgraph : VDigraph, vname: str, index, group=None, target=None, name=None, args=(), kwargs={},
+                 *, daemon=None):
+        self.dgraph = dgraph
+        self.name = vname
+        self.index = index
+        self.dgraph.node(self.name)
+        super().__init__(group=group, target=target, name=name, args=args, kwargs=kwargs, daemon=daemon)
+"""
+    def set_ready(self):
+        self.dgraph.node(self.name, color='red')
+
+    def set_waiting(self):
+        self.dgraph.node(self.name, color='black')
+
+    def connect(self, vpnode):
+        self.dgraph.edge(self.name, vpnode.name)
+"""
+
+class VPipe():
+    def __init__(self, duplex: bool = True):
+        self.pipe = multiprocessing.Pipe(duplex) 
+
+
+class VConn():
+    def __init__(self, dgraph : VDigraph, conn):
+        self.conn = conn
+        self.dgraph = dgraph
+    
+    def set_ready(self, vp : VProcess):
+        # By doing this instead of calling Digraph.Node(), the given given node can simply update its color however it needs an 'index' and a 'name' variable. Variables I thought would be well handled by the VProcess-wrapper.
+        self.dgraph.body[vp.index] = f'\t{vp.name} [color=red]\n'
+        self.dgraph.draw('test_output/test_vpgraph_step')
+
+    def set_waiting(self, vp : VProcess):
+        # Similar to the set_ready method above.
+        self.dgraph.body[vp.index] = f'\t{vp.name} [color=black]\n'
+        self.dgraph.draw('test_output/test_vpgraph_step')
+
+    def connect(self, sender : VProcess, receiver : VProcess):
+        self.dgraph.edge(sender.name, receiver.name)
+
+
+def VPipef(duplex: bool = True):
+    return multiprocessing.Pipe(duplex)
