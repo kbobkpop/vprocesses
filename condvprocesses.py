@@ -119,9 +119,13 @@ from multiprocessing.managers import SyncManager
 if __name__ == '__main__':
     managertest = SyncManager(ctx=multiprocessing.get_context())
     managertest.start()
-    numPairs = 2
+    numPairs = 4
+    
+    #outer_list is a proxy object used to maintain the state of the nodes
     outer_list = [managertest.list(['b', 'b']) for i in range(numPairs)]
     dot = graphviz.Digraph()
+
+    #the bools are ctypes
     workerbool = multiprocessing.Value(c_bool, False)
     managerbool = multiprocessing.Value(c_bool, True)
 
