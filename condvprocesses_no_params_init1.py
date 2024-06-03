@@ -209,7 +209,16 @@ def printEdges(edges):
 # ---- Tests ---- !
 
 def testProducerConsumer():
-    pipe_1_in, pipe_1_out = Pipe("p2")
+    pipe_1_in, pipe_1_out = Pipe("p1")
+    
+    processes = [VProcess(name="p1", target=producer, args=(pipe_1_out,)),
+                VProcess(name="c1", target=consumer, args=(pipe_1_in,))]
+
+    return processes 
+
+
+def testDoubleProducerConsumer():
+    pipe_1_in, pipe_1_out = Pipe("p1")
     pipe_2_in, pipe_2_out = Pipe("p2")
     
     processes = [VProcess(name="p1", target=producer, args=(pipe_1_out,)),
@@ -217,7 +226,8 @@ def testProducerConsumer():
                 VProcess(name="p2", target=producer, args=(pipe_2_out,)),
                 VProcess(name="c2", target=consumer, args=(pipe_2_in,))]
 
-    return processes 
+    return processes
+
 
 
 def testTransmit():
@@ -232,6 +242,15 @@ def testTransmit():
     return processes
 
 def testPingPong():
+    pipe_1_in, pipe_1_out = Pipe("p1")
+    pipe_2_in, pipe_2_out = Pipe("p2")
+    
+    processes = [VProcess(name="p1", target=pingpong, args=(0, pipe_1_in, pipe_2_out, "hello")),
+                VProcess(name="p2", target=pingpong, args=(1, pipe_2_in, pipe_1_out))]
+
+    return processes
+
+def testDoublePingPong():
     pipe_1_in, pipe_1_out = Pipe("p1")
     pipe_2_in, pipe_2_out = Pipe("p2")
 
@@ -249,8 +268,10 @@ def testPingPong():
 if __name__ == '__main__':
 
     processes = testProducerConsumer() # Works, but produces messy graphs until last process has received once
+    #processes = testDoubleProducerConsumer() # Works, but produces messy graphs until last process has received once
     #processes = testTransmit() # Works, but produces messy graphs until last process has received once
     #processes = testPingPong() # Works, but produces messy graphs until last process has received once
+    #processes = testDoublePingPong() # Works, but produces messy graphs until last process has received once
 
     for p in processes:
         p.start()

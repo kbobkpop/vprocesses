@@ -665,7 +665,7 @@ def VPipe(name=""):
 
     return patchConnection1, patchConnection2
 
-# Implementation done. Below is just testing
+# Implementation done. Below is just testing. Go the end file, to try out a few tests!
 
 def pingpong(i, input, output, initial_data=""):
     if initial_data:
@@ -914,7 +914,6 @@ def producerConsumerTest():
 def lockedProducer(conn, lock):
     for i in range(5):
         lock.acquire()
-        #print(multiprocessing.current_process(), "acquired lock, and is trying to send", i)
         conn.send(i)
         lock.release()
 
@@ -953,46 +952,6 @@ def selectVariableProducersConsumers(in_connections, out_connections, vs):
         index = random.randint(0, len(out_connections) - 1)
         out_connections[index].send(data)
 
-
-
-def DavidsSquid3(conn1, conn2, conn3, conn4, vs):
-    for i in range(10):
-        data1 = None
-        data2 = None
-        #print("DAVIDS SQUID, START OF WHILE")
-        (inputs, _, _) = vs.select([conn1, conn2], [], [])
-        #print(f"i: {i} inputs: ", inputs)
-        #print(f"conn1.connection in inputs and conn2.connection in inputs: {conn1.connection in inputs and conn2.connection in inputs}")
-        if conn1.connection in inputs and conn2.connection in inputs: #Is this connection not true
-            num = random.randint(0, 1)
-            #print("num:", num)
-            if num == 0:
-                #print(f"num 0, conn1 before recv")
-                data1 = conn1.recv()
-                #print(f"Davids Squid, conn1: {data1}")
-            else:
-                #print(f"not num 0, conn2 before recv")
-                data2 = conn2.recv()
-                #print(f"Davids Squid, conn2: {data2}")
-        elif conn1.connection in inputs:
-            #print(f"Davids Squid, conn1 before recv")
-            data1 = conn1.recv()
-            #print(f"Davids Squid, conn1: {data1}")
-        elif conn2.connection in inputs:
-            #print(f"Davids Squid, conn2 before recv")
-            data2 = conn2.recv()
-            #print(f"Davids Squid, conn2: {data2}")
-        
-        #num = random.randint(0, 1)
-        
-        if data1 != None:
-            #lock1.acquire()
-            conn3.send(data1)
-            #lock1.release()
-        elif data2 != None:
-            #lock2.acquire()
-            conn4.send(data2)
-            #lock2.release()
 
 def oneLockLockedProducerConsumerTest():
 
@@ -1497,7 +1456,7 @@ locks = []
 selects = []
 
 # Test 1
-#processes, channels = manySimpleConnectionsTest()
+processes, channels = manySimpleConnectionsTest()
 
 # Test 2
 #processes, channels, locks = twoLockLockedProducerConsumerTest()
