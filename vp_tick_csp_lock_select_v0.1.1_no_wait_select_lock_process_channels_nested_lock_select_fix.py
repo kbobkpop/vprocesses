@@ -1,43 +1,40 @@
 import multiprocessing
+import multiprocessing.synchronize
 import select
 import graphviz
 import random
 import os
 import shutil
-import time
 
-#VConnections no longer have separate connections but have the connections of their VProcess which are assigned upon initialization of the manager 
-#No need for select objects
-#No need to instantiate multiple VLocks. The same object can be share across multiple processes
-
-# Problem! - Not updating graph in current tick when acquiring a lock - Look at moving send or acquire lock
-# Problem! - cannot handle nested locks and select calls - Make the logic of acquiring, releasing locks and calling select a loop
+# VConnections no longer have separate connections but have the connections of their VProcess which are assigned upon initialization of the manager 
+# No need for select objects
+# No need to instantiate multiple VLocks. The same object can be share across multiple processes
+# Nested release and acquire calls on different locks are resolved in the same tick
+# Same for nested select calls if something is being sent on one of the channels that are being listened on
 
 class VManager():
-    def __init__(self, vprocesses, vconnections, vlocks=[], vselects=[], logging=False, output='output/Tick', outputFormat='pdf', interactiveLocks=False, logFileName="log.txt", terminateProcesses=True, draw=True) -> None:
+    def __init__(self, vprocesses, vconnections, vlocks=[], logging=False, output='output/Tick', outputFormat='pdf', interactiveLocks=False, logFileName="log.txt", terminateProcesses=True, draw=True, tickTock=True) -> None:
         self.processes = vprocesses # List of VProcess passed as to the class constructor as argument
         self.connections = vconnections # List of VConnection classes passed to the class constructor as argument
         self.locks = vlocks # List of VLock objects
-        self.selects = vselects # List of VSelect objects
         self.fromToConnectionDict = {} # Dictionary of normal connections, where they key is the connection intended for the manager to receive messages from sync-objects and the value is connection used to send to sync-objects. Populated in __init__
         self.syncObjectProcessLookup = {} # Dictionary mapping VConnections to process names
-        self.processToManagerSendConn = {}
-        self.processToManagerRecvConn = {}
+        self.processToManagerSendConn = {} # Dictionary mapping process name to that process' send connection to the manager 
+        self.processToManagerRecvConn = {} # Dictionary mapping process name to that process' receive connection from the manager
+        self.processToWorkerSendConn = {} # Dictionary mapping process name to that process' send connection to the worker
+        self.processToWorkerRecvConn = {} # Dictionary mapping process name to that process' receive connection from the worker
         self.tickCounter = 0 # Counter used for the number on the image file and showing which tick is run
         self.edges = [] # List of edges between processes for the graph used for drawing the image
         self.processNodes = [] # List of process nodes for the graph used for drawing the image
         self.lockNodes = [] # List of lock nodes for the graph used for drawing the image - Could possibly be merged with processNodes
         self.lockEdges = [] # List of edges between processes and locks for the graph used for drawing the image
-        self.selectNodes = [] # List of select nodes for the graph used for drawing the image
+        self.lockedLocks = [] # List of locks that are currently locked 
         self.waitingToSend = [] # List of processes waiting to send 
         self.waitingToReceive = [] # List of processes waiting to receive
         self.waitingToAcquire = [] # List of processes waiting to acquire a lock
         self.waitingToRelease = [] # List of processes waiting to release a lock
         self.waitingToSelect = [] # List of processes waiting to select
-        self.lockedLocks = [] # List of locks that are currently locked 
         self.prematureSelectSends = [] # List of sending processes that have been allowed to send because of an intervening select statment. However the processes are still not considered able, until the receiving sides have received on the channels.
-        if logging:
-            self.log = open(logFileName, "w")
         self.previousTickProcessCount = 0
         self.logging = logging
         self.outputFileName = output
@@ -45,33 +42,28 @@ class VManager():
         self.interactive = interactiveLocks
         self.terminateProcesses = terminateProcesses
         self.draw = draw
+        self.tickTock = tickTock
+        
+        if logging:
+            self.log = open(logFileName, "w")
         
         locknamenum = 1
         for lock in self.locks:
             if type(lock.name) == int:
-                tempname = lock.name
-                for name in self.locks:
-                    if name.name == tempname:
-                        name.name = "lock" + str(locknamenum)
+                lock.name = "lock" + str(locknamenum)
                 locknamenum += 1
-        
-        for lock in self.locks:
-            if not lock.name in self.lockNodes: # There are multiple VLocks sharing the same name
                 self.lockNodes.append(lock.name)
 
         # Setting up connections
         for process in self.processes:
             self.processNodes.append([process.name, "green", "solid", process.name])
             recv, send = process.setup_manager_connection()
-            process.from_worker_connections.append(recv)
-            process.to_worker_connections.append(send)
             self.fromToConnectionDict[recv] = send
             self.processToManagerSendConn[process.name] = process.send_to_manager
             self.processToManagerRecvConn[process.name] = process.recv_from_manager
+            self.processToWorkerRecvConn[process.name] = process.recv_from_worker
             for connection in process.connections:
                 connection.send_to_manager = process.send_to_manager
-                connection.recv_from_worker = process.recv_from_worker
-                connection.send_to_worker = process.send_to_worker
                 connection.recv_from_manager = process.recv_from_manager
                 self.syncObjectProcessLookup[connection.name] = process
 
@@ -113,33 +105,20 @@ class VManager():
             return False
         
         self.previousTickProcessCount = len(processes)
-        
-        releases = []
-        acquires = []
 
-        #releases, acquires = self.getRequests(processes)
         releases, acquires, selects = self.getRequests(processes)
 
         acquires.extend(self.waitingToAcquire)
         selects.extend(self.waitingToSelect)
 
+        acquires, selects = self.handleNonChannels(releases, acquires, selects)
 
-        print(f"Pre handleLocks: releases: {releases} acquires: {acquires}, selects: {selects}")
-        releases, acquires, selects = self.handleNonChannels(releases, acquires, selects)
-        #self.handleLocks(releases, acquires)
-
-        print(f"Post handleLocks: releases: {releases} acquires: {acquires}, selects: {selects}")
         self.waitingToAcquire = acquires
         self.waitingToSelect = selects
-        #updateLocksList, updateNodesList, progressList = self.releaseLocks()
-#
-        #updateLocksList, updateNodesList = self.acquireLocks(updateLocksList, updateNodesList, progressList)
 
         updateNodesList = []
 
         updateEdgesList, updateNodesList = self.handleSend(updateNodesList)
-
-        #updateNodesList = self.handleSelect(updateNodesList)
 
         updateNodesList, updateEdgesList = self.handleReceive(updateEdgesList, updateNodesList)
 
@@ -147,59 +126,49 @@ class VManager():
 
         ableProcesses = self.getAbleProcesses()
     
-        self.printState()
-        print("ableProcesses: ", ableProcesses)
-
+        #self.printState()
+        #print("ableProcesses: ", ableProcesses)
+        
         return ableProcesses
     
     def getRequests(self, ableProcesses):
         requestsSentFromAbleProcesses = [0 for _ in ableProcesses]
-        if self.logging:
-            loglist = []
-        #removeList = []
+        loglist = []
         releases = []
         acquires = []
         selects = []
         for index, process in enumerate(ableProcesses):
-            conn = process.recv_from_worker
+            conn = self.processToWorkerRecvConn[process.name]
+            #conn = process.recv_from_worker
             request = conn.recv()
-            #self.parseRequest(process.recv_from_worker, request, process)
             requestsSentFromAbleProcesses[index] += 1
-            action, data = request 
+            action, rest = request 
             if action == "acquire":
-                process1Name, lockName = data
-                acquires.append([lockName, process1Name, self.fromToConnectionDict[conn]])
-                #if self.logging:
-                #    loglist.append(f"{process1Name} requests to acquire {lockName}")
+                lockName = rest
+                acquires.append([lockName, process.name, self.fromToConnectionDict[conn]]) 
+                loglist.append(f"{process.name} requests to acquire {lockName}")
             elif action == "release":
-                process1Name, lockName = data
-                releases.append([lockName, process1Name, self.fromToConnectionDict[conn]])
-                #if self.logging:
-                #    loglist.append(f"{process1Name} requests to release {lockName}")
+                lockName = rest
+                releases.append([lockName, process.name, self.fromToConnectionDict[conn]]) 
+                loglist.append(f"{process.name} requests to release {lockName}")
             elif action == "select":
-                process1Name, selectlist = data
-                selects.append([process1Name, self.fromToConnectionDict[conn], selectlist])
-                #if self.logging:
-                #    loglist.append(f"{process1Name} requests to selecting")
-            elif action == "terminate":
-                process1Name = data 
+                selectlist = rest
+                selects.append([process.name, self.fromToConnectionDict[conn], selectlist])
+                loglist.append(f"{process.name} requests to selecting")
+            elif action == "terminate": 
                 self.fromToConnectionDict[conn].send(True)
                 self.processes.remove(process)
-                #removeList.append(process)
                 self.updateNode(process.name, "black", "bold", process.name + "☠️")
                 process.join()
-                #if self.logging:
-                #    loglist.append(f"{self.syncObjectProcessLookup[process1Name].name} requests to terminate")
+                loglist.append(f"{process.name} requests to terminate")
             else:
-                vconnName, otherEndsVConnName, transfer = data
+                vconnName, otherEndsVConnName, transfer = rest
                 if action == "recv":
-                    self.waitingToReceive.append((otherEndsVConnName, vconnName, " ", self.fromToConnectionDict[conn], otherEndsVConnName))
-                    #if self.logging:
-                    #    loglist.append(f"{self.syncObjectProcessLookup[vconnName].name} requests to receive from {self.syncObjectProcessLookup[otherEndsVConnName].name}")
+                    self.waitingToReceive.append((otherEndsVConnName, vconnName, " ", self.fromToConnectionDict[conn]))
+                    loglist.append(f"{process.name} requests to receive from {self.syncObjectProcessLookup[otherEndsVConnName].name}")
                 elif action == "send":
-                    self.waitingToSend.append((vconnName, otherEndsVConnName, transfer, self.fromToConnectionDict[conn], otherEndsVConnName))
-                    #if self.logging:
-                    #    loglist.append(f"{self.syncObjectProcessLookup[vconnName].name} requests to send to {self.syncObjectProcessLookup[otherEndsVConnName].name}")
+                    self.waitingToSend.append((vconnName, otherEndsVConnName, transfer, self.fromToConnectionDict[conn]))
+                    loglist.append(f"{process.name} requests to send to {self.syncObjectProcessLookup[otherEndsVConnName].name}")
         
         if self.logging:
             self.log.write(f"Tick {self.tickCounter}" + '\n')
@@ -209,7 +178,7 @@ class VManager():
 
         for request in requestsSentFromAbleProcesses:
             if request != 1:
-                print(f"ERROR: A PROCESS HAS SENT MORE THAN ONE MESSAGE - {requestsSentFromAbleProcesses}")
+                print(f"ERROR: A PROCESS HAS EITHER SENT MORE THAN ONE MESSAGES OR NOT SENT A MESSAGE - {requestsSentFromAbleProcesses}")
 
         return releases, acquires, selects
     
@@ -219,28 +188,19 @@ class VManager():
         for request in self.waitingToSend:
             for edge in self.edges:
                 if edge[0] == request[0] and edge[1] == request[1]:
-                    if edge[2] == ' ':
+                    if self.tickTock:
+                        condition = edge[2] == ' '
+                    else:
+                        condition = True
+                    if condition:
                         updateEdgesList.append([request[0], request[1], request[2]])
                         process = self.syncObjectProcessLookup[request[0]].name
                         updateNodesList.append([process, 'red', 'solid', process])
         
         return updateEdgesList, updateNodesList
 
-
-    def getSendEdge(self, id):
-        for edge in self.edges:
-            if edge[0] == id:
-                return edge
-
-    def getRecvEdge(self, id):
-        for edge in self.edges:
-            if edge[1] == id:
-                return edge
-
     def handleSelect(self, releaseList, acquireList, selectList):
-        #updateNodesList = []
-        #for select in self.waitingToSelect:
-        #    updateNodesList.append([select[0], 'red', 'dashed', select[0]])
+
         newrl = []
         newal = []
         newsl = []
@@ -250,21 +210,24 @@ class VManager():
         tmpSelectList = selectList[:]
         tmpSendList = self.waitingToSend[:]
         tmpPrematureSendList = self.prematureSelectSends[:] 
-        for pslct in tmpSelectList:  # self.waitingToSelect #Select objec
+        for pslct in tmpSelectList:  # self.waitingToSelect 
             remove = False
             selectlist = pslct[2] 
             for conn in selectlist:
-                #print("conn:", conn.name)
                 edge = self.getRecvEdge(conn.name)
-                if edge[2] != ' ':
+                if self.tickTock:
+                    condition = edge[2] != ' '
+                else:
+                    condition = True
+                if condition:
                     for wts in tmpSendList: #self.waitingToSend
-                        if conn.name == wts[4]:                     
+                        if conn.name == wts[1]:
                             wts[3].send(True)
                             remove = True
-                            self.prematureSelectSends.append(wts) # These being appended before should not matter for the receive loop, as there should not be requests waiting to receive on the channel, as the selecting process will be the one receiving ecentually.
+                            self.prematureSelectSends.append(wts) # These being appended before receive should not matter for handleReceive, as there should not be requests waiting to receive on the channel, as the selecting process will be the one receiving eventually.
                             self.waitingToSend.remove(wts) 
-                    for pss in tmpPrematureSendList: #self.prematureSelectSends - If there is a connection matching on the prematureSelectSends to one of those being selected upon the selecting process is allowed to proceed
-                        if conn.name == pss[4]:
+                    for pss in tmpPrematureSendList:
+                        if conn.name == pss[1]:
                             remove = True
 
             if remove == True:
@@ -286,18 +249,20 @@ class VManager():
     def handleReceive(self, updateEdgesList, updateNodesList):
         
         removeRecv = []
-        for request in self.waitingToReceive: # should be able to be replaced with waiting to receive.  The premature send is in the uncompleted receive
+        for request in self.waitingToReceive:
             for currentedge in self.edges:
-                if currentedge[0] == request[0] and currentedge[1] == request[1]: #For each edge in the graph check if there is a corresponding uncompletedRecv
-                    if currentedge[2] != ' ': #Since this is true, there must be a connection sending on that connection either in self.waitingToSend or self.prematureSelectSends
+                if currentedge[0] == request[0] and currentedge[1] == request[1]:
+                    if self.tickTock:
+                        condition = currentedge[2] != ' '
+                    else:
+                        condition = True
+                    if condition:
                         p1name = None
                         match = False
-                        # An edge is being added to be updated below for the visual graph and the send and receive is being completed, by sending a message to the two connections.
-                        # - Unless a permission has already been sent in case of a premature select send, in which case a permission is only being sent to the receiving process.
                         updateEdgesList.append([request[0], request[1], request[2]])
                         removelist = []
                         for wts in self.waitingToSend: 
-                            p1name, _, _, conn, _ = wts
+                            p1name, _, _, conn = wts
                             if p1name == request[0]:
                                 match = True
                                 conn.send(True)
@@ -343,7 +308,6 @@ class VManager():
         templocks = self.lockNodes[:]
         for lock in templocks:
             if not self.checkLocked(lock):
-            #if lock not in self.lockedLocks:
                 templist = []
                 for pwta in processesWaitingToAcquire:
                     if lock == pwta[0]:
@@ -366,7 +330,6 @@ class VManager():
                                     templist[choice][2].send(True)                                    
                                     process = self.getProcess(templist[randIndex][1])
                                     rl, al, sl = self.getRequests([process])
-                                    print("received requests:", rl, al, sl)
                                     newrl.extend(rl)
                                     newal.extend(al)
                                     newsl.extend(sl)
@@ -379,11 +342,9 @@ class VManager():
                         templist[randIndex][2].send(True)
                         process = self.getProcess(templist[randIndex][1])
                         rl, al, sl = self.getRequests([process])
-                        print("received requests:", rl, al, sl)
                         newrl.extend(rl)
                         newal.extend(al)
                         newsl.extend(sl)
-
                         self.lockedLocks.append([templist[randIndex][0], templist[randIndex][1]])
                         acquireList.remove(templist[randIndex])
 
@@ -393,55 +354,27 @@ class VManager():
 
         return releaseList, acquireList, selectList, acquired
     
-    def checkLocked(self, lock):
-        for pair in self.lockedLocks:
-            if pair[0] == lock:
-                return True
-
     def handleNonChannels(self, releaseList, acquireList, selectList):
 
-        #handle all releases
-        #handle all acquires
         acquired = True
         while (releaseList or acquireList or selectList) and acquired:
-            #print(f"1st while-loop: releaseList: {releaseList}, acquireList: {acquireList}, selectList: {selectList}")
+            acquired = False
             selected = True
             while (releaseList or selectList) and selected:
-            #while releaseList or selectList:
                 selected = False
-                #print(f"releaseList: {releaseList}, selectList: {selectList}, selected: {selected}" )
-                #print(f"start: not selected: {not selected}, not releaseList: {not releaseList}, both: {not selected and not releaseList}")
-                while releaseList:
-                    #print("calling releaseLocks")
-                    releaseList, acquireList, selectList = self.releaseLocks(releaseList, acquireList, selectList)
-                    #releaseList, acquireList, selectList, selected = self.handleSelect2(releaseList, acquireList, selectList)
                 
+                while releaseList:
+                    releaseList, acquireList, selectList = self.releaseLocks(releaseList, acquireList, selectList)
+    
                 if selectList:
-                #while selectList and not selected:
-                    #print(f"calling handleSelect2, selectList and not selected {selectList and not selected}")
                     releaseList, acquireList, selectList, selected = self.handleSelect(releaseList, acquireList, selectList)
-                    #if not selected:
-                    #    #print("breaking after select")
-                    #    break
-#
-                #print(f"end: not selected: {not selected}, not releaseList: {not releaseList}, both: {not selected and not releaseList}")
-                #if not selected and not releaseList:
-                #    #print("first while loop breaking")
-                #    break
 
             if acquireList:
-                #print("calling acquireLocks, acquireList:", acquireList)
                 releaseList, acquireList, selectList, acquired = self.acquireLocks(releaseList, acquireList, selectList)
-                #print("post acquireLocks, acquireList:", acquireList)
-                #if not acquired:
-                #    break
             else: 
                 break
 
-        #print(f"post while: releaseList: {releaseList}, acquireList: {acquireList}, selectList: {selectList}")
-        
-        return releaseList, acquireList, selectList
-
+        return acquireList, selectList
 
     def releaseLocks(self, releaseList, acquireList, selectList):
         newrl = []
@@ -486,38 +419,11 @@ class VManager():
             for p in self.waitingToAcquire: 
                 if process.name == p[1]:
                     ableProcesses.remove(process)
-            for p in self.waitingToRelease:
-                if process.name == p[1]:
-                    ableProcesses.remove(process)
             for p in self.waitingToSelect:
                 if process.name == p[0]:
                     ableProcesses.remove(process)
 
         return ableProcesses
-
-    #def updateGraph(self, updateLocksList, updateNodesList, updateEdgesList, updateSelectsList):
-    def updateGraph(self, updateNodesList, updateEdgesList):
-        
-        for node in updateNodesList:
-            self.updateNode(node[0], node[1], node[2], node[3])
-        
-        for node in self.waitingToSelect:
-            self.updateNode(node[1], 'red', 'dashed', node[1])
-
-        for edge in self.lockEdges:
-            self.updateLockEdges(edge[0], edge[1], 'black', 'dashed')
-
-        for req in self.waitingToAcquire: #[lockName, process1Name, self.fromToConnectionDict[conn]]          
-            self.updateLockEdges(req[0], req[1], 'purple', 'dashed')
-
-        for lock in self.lockedLocks:
-            self.updateLockEdges(lock[0], lock[1], 'blue', 'solid')
-        
-        for edge in updateEdgesList:
-            self.updateEdges(edge[0], edge[1], edge[2])
-        
-        if self.draw:
-            self.drawGraph()
 
     def init_graph(self):
         
@@ -527,16 +433,39 @@ class VManager():
                     for p2 in self.processes:
                         for conn2 in p2.connections:
                             if type(conn2) == VConnection:
-                                if conn.otherEnd == conn2 and conn.sender == True:
+                                if conn.otherEndsName == conn2.name and conn.sender == True:
                                     self.edges.append([conn.name, conn2.name, " "])
 
             for lock in process.locks:
                 if type(lock) == VLock:
-                    self.lockEdges.append([lock.name, process.name, " ", "black", "dashed"])
+                    self.lockEdges.append([lock.name, process.name, "black", "dashed"])     
 
-                #if type(conn) == VSelect:
-                    #self.selectNodes.append([process.name, "green", "solid"])           
+        if self.draw:
+            self.drawGraph()
 
+    def updateGraph(self, updateNodesList, updateEdgesList):
+        
+        for node in updateNodesList:
+            self.updateNode(node[0], node[1], node[2], node[3])
+        
+        for edge in updateEdgesList:
+            self.updateEdge(edge[0], edge[1], edge[2])
+        
+        for node in self.waitingToSelect:
+            self.updateNode(node[0], 'red', 'dashed', node[0])
+
+        for request in self.waitingToAcquire:
+            self.updateNode(request[1], 'red', 'solid', request[1])
+        
+        for edge in self.lockEdges:
+            self.updateLockEdge(edge[0], edge[1], 'black', 'dashed')
+
+        for req in self.waitingToAcquire:
+            self.updateLockEdge(req[0], req[1], 'purple', 'dashed')
+
+        for lock in self.lockedLocks:
+            self.updateLockEdge(lock[0], lock[1], 'blue', 'solid')
+        
         if self.draw:
             self.drawGraph()
 
@@ -544,37 +473,34 @@ class VManager():
 
         dgraph = graphviz.Digraph(format=self.outputFormat)
         dgraph.attr(label=f"Tick {self.tickCounter}", labelloc="t")
-        for node in self.processNodes: # Format: [name, color, style]
+
+        for node in self.processNodes: # Format: [process name, color, style, label]
             dgraph.node(node[0], color=node[1], style=node[2], label=node[3])
-        for edge in self.edges: # Format: [vconn1.name, vconn2.name, data]
+
+        for edge in self.edges: # Format: [vconn1 name, vconn2 name, transfer data]
             p1 = self.syncObjectProcessLookup[edge[0]].name
             p2 = self.syncObjectProcessLookup[edge[1]].name
             dgraph.edge(p1, p2, edge[2]) 
+
         for node in self.lockNodes: # Format: [lock name]
             dgraph.node(node, shape="square")
+
         for edge in self.lockEdges: # Format: [lock name, process name, color, style]
             dgraph.edge(edge[0], edge[1], color=edge[2], style=edge[3], dir="none")
-        for node in self.selectNodes: # Format: [process name, color, style]
-            dgraph.node(node[0], color=node[1], style=node[2])
+
         filename = self.outputFileName + '_' + str(self.tickCounter)
         dgraph.render(filename)
 
-    def updateEdges(self, name1, name2, input):
+    def updateEdge(self, name1, name2, input):
         for edge in self.edges:
             if name1 == edge[0] and name2 == edge[1]:
                 edge[2] = str(input)
 
-    def updateLockEdges(self, name1, name2, color, style):
+    def updateLockEdge(self, name1, name2, color, style):
         for edge in self.lockEdges:
             if name1 == edge[0] and name2 == edge[1]:
                 edge[2] = color
                 edge[3] = style
-
-    def updateSelectNodes(self, node, color, style):
-        for selectNode in self.selectNodes:
-            if node == selectNode[0]:
-                selectNode[1] = color
-                selectNode[2] = style
 
     def updateNode(self, node, color, style, label):
         for processNode in self.processNodes:
@@ -591,12 +517,30 @@ class VManager():
         print(f"self.waitingToAcquire {self.waitingToAcquire}")
         print(f"self.waitingToRelease {self.waitingToRelease}")
         print(f"self.lockedLocks {self.lockedLocks}")
+    
+    def checkLocked(self, lock):
+        for pair in self.lockedLocks:
+            if pair[0] == lock:
+                return True
+    
+    def getSendEdge(self, id):
+        for edge in self.edges:
+            if edge[0] == id:
+                return edge
+
+    def getRecvEdge(self, id):
+        for edge in self.edges:
+            if edge[1] == id:
+                return edge
+
 
 class VProcess(multiprocessing.Process):
+    num = 0
     def __init__(self, group = None, target = None, name = None, args = [], kwargs = {}, *, daemon = None) -> None:
+        if not name:
+            name = 'p' + str(VProcess.num)
+            VProcess.num += 1
         super().__init__(group, target, name, args, kwargs, daemon=daemon)
-        self.to_worker_connections = []
-        self.from_worker_connections = []
         self.connections = [] # All synchronization objects given as parameters to target
         self.locks = []
 
@@ -619,21 +563,17 @@ class VProcess(multiprocessing.Process):
 
     def run(self):
         super().run()
-        self.send_to_manager.send(("terminate", [self.name]))
+        self.send_to_manager.send(("terminate", self.name))
         self.recv_from_manager.recv()
 
 
 class VLock():
-    def __init__(self, lock, name=None):
-        self.lock = lock
-        self.send_to_manager = None 
-        self.recv_from_worker = None
-        self.send_to_worker = None
-        self.recv_from_manager = None
+    def __init__(self, name=None):
+        self.lock = multiprocessing.Lock()
         if name: 
             self.name = name
         else:
-            self.name = id(lock)
+            self.name = id(self)
     
     def setDictionaries(self, sendDict, recvDict):
         self.processToManagerSendConn = sendDict
@@ -643,7 +583,7 @@ class VLock():
         processName = multiprocessing.current_process().name
         sendconn = self.processToManagerSendConn[processName]
         recvconn = self.processToManagerRecvConn[processName]
-        sendconn.send(("acquire", [processName, self.name]))
+        sendconn.send(("acquire", self.name))
         recvconn.recv()
         self.lock.acquire()
 
@@ -651,25 +591,12 @@ class VLock():
         processName = multiprocessing.current_process().name
         sendconn = self.processToManagerSendConn[processName]
         recvconn = self.processToManagerRecvConn[processName]
-        sendconn.send(("release", [processName, self.name]))
+        sendconn.send(("release", self.name))
         recvconn.recv()
         self.lock.release()
 
 
 class VSelect():
-    processToManagerSendConn = None
-    processToManagerRecvConn = None
-    def __init__(self, name=None):
-        self.send_to_manager = None 
-        self.recv_from_worker = None
-        self.send_to_worker = None
-        self.recv_from_manager = None
-        self.processToManagerSendConn = {}
-        self.processToManagerRecvConn = {}
-        if name:
-            self.name = name
-        else:
-            self.name = id(self) 
 
     @classmethod
     def setDictionaries(cls, sendDict, recvDict):
@@ -681,7 +608,7 @@ class VSelect():
         processName = multiprocessing.current_process().name
         sendconn = cls.processToManagerSendConn[processName]
         recvconn = cls.processToManagerRecvConn[processName]
-        sendconn.send(("select", [processName, vselectlist1])) # For now just sending selectlist1
+        sendconn.send(("select", vselectlist1)) # For now just sending selectlist1
         recvconn.recv()
         selectlist1 = [vconn.connection for vconn in vselectlist1]
         (inputs1, inputs2, inputs3) = select.select(selectlist1, selectlist2, selectlist3)
@@ -697,12 +624,9 @@ class VConnection():
     def __init__(self, connection, name, otherEndsName, sender=True) -> None:
         self.name = name
         self.otherEndsName = otherEndsName
-        self.otherEnd = None
         self.connection = connection
         self.send_to_manager = None
-        self.recv_from_worker = None
-        self.send_to_worker = None 
-        self.recv_from_manager = None 
+        self.recv_from_manager = None
         self.sender = sender
 
     def send(self, data):
@@ -710,7 +634,6 @@ class VConnection():
         good_to_go = self.recv_from_manager.recv()
         if good_to_go:
             self.connection.send(data)
-            print(multiprocessing.current_process().name, "just sent ", data)
     
     def recv(self):
         self.send_to_manager.send(("recv", [self.name, self.otherEndsName, " "]))
@@ -724,12 +647,10 @@ def VPipe(name=""):
     end1, end2 = multiprocessing.Pipe()
     if name == "":
         name = id(end1)
-    VConnection1 = VConnection(end1, f"{name}_w", f"{name}_r", sender=True)
-    VConnection2 = VConnection(end2, f"{name}_r", f"{name}_w", sender=False)
-    VConnection1.otherEnd = VConnection2
-    VConnection2.otherEnd = VConnection1
+    vconn1 = VConnection(end1, f"{name}_w", f"{name}_r", sender=True)
+    vconn2 = VConnection(end2, f"{name}_r", f"{name}_w", sender=False)
 
-    return VConnection1, VConnection2
+    return vconn1, vconn2
 
 
 # Implementation done. Below is just testing. Go to the end of the file, to try out a few tests!
@@ -784,7 +705,6 @@ def producer(conn, iterations, outputdir="vtest/"):
     output = open(outputdir + process.name, "w")
     for i in range(iterations):
         conn.send(i)
-        print(f"{process.name} sent {i}")
         output.write(str(i))
         output.flush()
 
@@ -964,189 +884,37 @@ def veryLockedProducer2(lock1, lock2, lock3, conn, iterations):
         lock2.release()
         lock3.release()
 
+def veryLockedProducer3(lock1, lock2, lock3, conn, iterations):
+    for i in range(iterations):
+        lock1.acquire()
+        lock2.acquire()
+        lock3.acquire()
+        conn.send(i)
+        lock1.release()
+        lock2.release()
+        lock3.release()
+
+def veryLockedProducer4(lock1, lock2, lock3, conn, iterations):
+    for i in range(iterations):
+        lock1.acquire()
+        lock2.acquire()
+        lock1.release()
+        lock3.acquire()
+        conn.send(i)
+        lock2.release()
+        lock3.release()
+
 def nestedLockedSelect(lock1, lock2, lock3, conn1, conn2, conn3, iterations):
     for i in range(iterations):
         lock1.acquire()
         lock2.acquire()
         inputs,_,_ = VSelect.select([conn1, conn2, conn3], [], [])
-        print("inputs:", inputs)
         lock3.acquire()
         lock1.release()
         lock2.release()        
         for input in inputs:
             input.recv()
         lock3.release()  
-    
-def nestedLocksSelectTest(iterations):
-
-    lock1 = VLock(multiprocessing.Lock())
-    lock2 = VLock(multiprocessing.Lock())
-    lock3 = VLock(multiprocessing.Lock())
-
-    locks = [lock1, lock2, lock3] 
-
-    p1, c1 = VPipe()
-    p2, c2 = VPipe()
-    p3, c3 = VPipe()
-
-    channels = [p1, c1, p2, c2, p3, c3]
-
-    processes = [
-            VProcess(
-                    target=nestedLockedSelect, 
-                    args=(lock1, lock2, lock3, c1, c2, c3, iterations + 1),
-                    name="nls1"
-                    ),
-            #VProcess(
-            #        target=nestedLockedSelect, 
-            #        args=(lock1, lock2, lock3, c1, c2, c3, iterations),
-            #        name="nls2"
-            #        ),
-            VProcess(
-                    target=producer, 
-                    args=(p1, iterations), 
-                    name="p1"
-                    ),
-            VProcess(
-                    target=producer, 
-                    args=(p2, iterations), 
-                    name="p2"
-                    ),
-            VProcess(
-                    target=producer, 
-                    args=(p3, iterations), 
-                    name="p3"
-                    )
-                 ]
-    
-    return processes, channels, locks
-
-
-
-def nestedLocksTest(iterations):
-    lock1 = VLock(multiprocessing.Lock())
-    lock2 = VLock(multiprocessing.Lock())
-    lock3 = VLock(multiprocessing.Lock())
-    lock4 = VLock(multiprocessing.Lock())
-    
-
-    locks = [lock1, lock2, lock3, lock4] 
-
-    p1, c1 = VPipe()
-    p2, c2 = VPipe()
-    p3, c3 = VPipe()
-    p4, c4 = VPipe()
-
-    channels = [p1, c1, p2, c2, p3, c3, p4, c4]
-
-    processes = [
-            VProcess(
-                    target=veryLockedProducer, 
-                    args=(locks, p1, iterations), 
-                    name="lp1"
-                    ),
-            VProcess(
-                    target=veryLockedProducer, 
-                    args=(locks, p2, iterations), 
-                    name="lp2"
-                    ),
-            VProcess(
-                    target=veryLockedProducer, 
-                    args=(locks, p3, iterations), 
-                    name="lp3"
-                    ),
-            VProcess(
-                    target=veryLockedProducer, 
-                    args=(locks, p4, iterations), 
-                    name="lp4"
-                    ),
-            VProcess(
-                    target=consumer, 
-                    args=(c1, iterations), 
-                    name="c1"
-                    ),
-            VProcess(
-                    target=consumer, 
-                    args=(c2, iterations), 
-                    name="c2"
-                    ),
-            VProcess(
-                    target=consumer, 
-                    args=(c3, iterations), 
-                    name="c3"
-                    ),
-            VProcess(
-                    target=consumer, 
-                    args=(c4, iterations), 
-                    name="c4"
-                    )
-                 ]
-    
-    return processes, channels, locks
-
-def nestedLocksTest2(iterations):
-
-    lock1 = VLock(multiprocessing.Lock())
-    lock2 = VLock(multiprocessing.Lock())
-    lock3 = VLock(multiprocessing.Lock())
-    #lock4 = VLock(multiprocessing.Lock())
-    
-
-    locks = [lock1, lock2, lock3] 
-
-    p1, c1 = VPipe()
-    p2, c2 = VPipe()
-    p3, c3 = VPipe()
-    p4, c4 = VPipe()
-
-    channels = [p1, c1, p2, c2, p3, c3, p4, c4]
-
-    processes = [
-            VProcess(
-                    target=veryLockedProducer2, 
-                    args=(lock1, lock2, lock3, p1, iterations), 
-                    name="lp1"
-                    ),
-            VProcess(
-                    target=veryLockedProducer2, 
-                    args=(lock1, lock2, lock3, p2, iterations), 
-                    name="lp2"
-                    ),
-            VProcess(
-                    target=veryLockedProducer2, 
-                    args=(lock1, lock2, lock3, p3, iterations), 
-                    name="lp3"
-                    ),
-            VProcess(
-                    target=veryLockedProducer2, 
-                    args=(lock1, lock2, lock3, p4, iterations), 
-                    name="lp4"
-                    ),
-            VProcess(
-                    target=consumer, 
-                    args=(c1, iterations), 
-                    name="c1"
-                    ),
-            VProcess(
-                    target=consumer, 
-                    args=(c2, iterations), 
-                    name="c2"
-                    ),
-            VProcess(
-                    target=consumer, 
-                    args=(c3, iterations), 
-                    name="c3"
-                    ),
-            VProcess(
-                    target=consumer, 
-                    args=(c4, iterations), 
-                    name="c4"
-                    )
-                 ]
-    
-    return processes, channels, locks
-
-
 
 def selectVariableProducersConsumers1(in_connections, out_connections, vselect, num, iterations):
     for i in range(num * iterations):
@@ -1473,12 +1241,7 @@ def doubleProducerConsumerTest(iterations, outputdir="vtest/"):
 
 def oneLockLockedProducerConsumerTest(iterations, outputdir="vtest/"):
 
-    lock = multiprocessing.Lock()
-
-    vlock1 = VLock(lock)
-    vlock2 = VLock(lock)
-    vlock3 = VLock(lock)
-    vlock4 = VLock(lock)
+    vlock = VLock()
 
     p1, c1 = VPipe()
     p2, c2 = VPipe()
@@ -1488,22 +1251,22 @@ def oneLockLockedProducerConsumerTest(iterations, outputdir="vtest/"):
     processes = [
             VProcess(
                 target=lockedProducer, 
-                args=(p1, vlock1, iterations, outputdir),
+                args=(p1, vlock, iterations, outputdir),
                 name="p1"
             ),
             VProcess(
                 target=lockedProducer, 
-                args=(p2, vlock2, iterations, outputdir),
+                args=(p2, vlock, iterations, outputdir),
                 name="p2"
             ),
             VProcess(
                 target=lockedProducer, 
-                args=(p3, vlock3, iterations, outputdir),
+                args=(p3, vlock, iterations, outputdir),
                 name="p3"
             ),
             VProcess(
                 target=lockedProducer, 
-                args=(p4, vlock4, iterations, outputdir),
+                args=(p4, vlock, iterations, outputdir),
                 name="p4"
             ),
             VProcess(
@@ -1529,21 +1292,14 @@ def oneLockLockedProducerConsumerTest(iterations, outputdir="vtest/"):
     ]
 
     channels = [p1, c1, p2, c2, p3, c3, p4, c4]
-    locks = [vlock1, vlock2, vlock3, vlock4]
+    locks = [vlock]
 
     return processes, channels, locks
 
 def twoLockLockedProducerConsumerTest(iterations, outputdir="vtest/"):
 
-    lock1 = multiprocessing.Lock()
-    lock2 = multiprocessing.Lock()
-
-    vlock1 = VLock(lock1)
-    vlock2 = VLock(lock1)
-    vlock3 = VLock(lock1)
-    vlock4 = VLock(lock2)
-    vlock5 = VLock(lock2)
-    vlock6 = VLock(lock2)
+    vlock1 = VLock()
+    vlock2 = VLock()
 
     p1, c1 = VPipe()
     p2, c2 = VPipe()
@@ -1560,27 +1316,27 @@ def twoLockLockedProducerConsumerTest(iterations, outputdir="vtest/"):
             ),
             VProcess(
                 target=lockedProducer, 
-                args=(p2, vlock2, iterations, outputdir),
+                args=(p2, vlock1, iterations, outputdir),
                 name="p2"
             ),
             VProcess(
                 target=lockedProducer, 
-                args=(p3, vlock3, iterations, outputdir),
+                args=(p3, vlock1, iterations, outputdir),
                 name="p3"
             ),
             VProcess(
                 target=lockedProducer, 
-                args=(p4, vlock4, iterations, outputdir),
+                args=(p4, vlock2, iterations, outputdir),
                 name="p4"
             ),
             VProcess(
                 target=lockedProducer, 
-                args=(p5, vlock5, iterations, outputdir),
+                args=(p5, vlock2, iterations, outputdir),
                 name="p5"
             ),
             VProcess(
                 target=lockedProducer, 
-                args=(p6, vlock6, iterations, outputdir),
+                args=(p6, vlock2, iterations, outputdir),
                 name="p6"
             ),
             VProcess(
@@ -1616,15 +1372,14 @@ def twoLockLockedProducerConsumerTest(iterations, outputdir="vtest/"):
     ]
 
     channels = [p1, c1, p2, c2, p3, c3, p4, c4, p5, c5, p6, c6]
-    locks = [vlock1, vlock2, vlock3, vlock4, vlock5, vlock6]
+    locks = [vlock1, vlock2]
 
     return processes, channels, locks
 
 def lockedPingPongTest(iterations, outputdir="vtest/"):
-    lock = multiprocessing.Lock()
     
-    vlock1 = VLock(lock)
-    vlock2 = VLock(lock)
+    vlock1 = VLock()
+    vlock2 = VLock()
     
     pipe_1_in, pipe_1_out  = VPipe()
     pipe_2_in, pipe_2_out  = VPipe()
@@ -1654,13 +1409,9 @@ def lockedPingPongTest(iterations, outputdir="vtest/"):
     return processes, channels, locks
 
 def lockedMultiplePingPongTest(iterations, outputdir="vtest/"):
-    lock = multiprocessing.Lock()
     
-    vlock1 = VLock(lock)
-    vlock2 = VLock(lock)
-    vlock3 = VLock(lock)
-    vlock4 = VLock(lock)
     
+    vlock = VLock()
 
     pipe_1_in, pipe_1_out  = VPipe()
     pipe_2_in, pipe_2_out  = VPipe()
@@ -1670,27 +1421,27 @@ def lockedMultiplePingPongTest(iterations, outputdir="vtest/"):
     processes = [
         VProcess(
             target=lockedPingPong, 
-            args=(0, vlock1, pipe_1_in, pipe_2_out, iterations, outputdir,"hello"),
+            args=(0, vlock, pipe_1_in, pipe_2_out, iterations, outputdir,"hello"),
             name="Albert"
         ),
         VProcess(
             target=lockedPingPong, 
-            args=(1, vlock2, pipe_2_in, pipe_1_out, iterations, outputdir),
+            args=(1, vlock, pipe_2_in, pipe_1_out, iterations, outputdir),
             name="Bertha"
         ),
         VProcess(
             target=lockedPingPong, 
-            args=(0, vlock3, pipe_3_in, pipe_4_out, iterations, outputdir,"hello"),
+            args=(0, vlock, pipe_3_in, pipe_4_out, iterations, outputdir,"hello"),
             name="Cindy"
         ),
         VProcess(
             target=lockedPingPong, 
-            args=(1, vlock4, pipe_4_in, pipe_3_out, iterations, outputdir),
+            args=(1, vlock, pipe_4_in, pipe_3_out, iterations, outputdir),
             name="Dennis"
         ),
     ]
 
-    locks = [vlock1, vlock2, vlock3, vlock4]
+    locks = [vlock]
 
     channels = [
         pipe_1_in,
@@ -1706,16 +1457,8 @@ def lockedMultiplePingPongTest(iterations, outputdir="vtest/"):
 
 def selectSharedLockTwoLockedProducersTwoConsumersTest(iterations, outputdir="vtest/"):
     
-    vs = VSelect(name="vselector")
-
-    lock1 = multiprocessing.Lock()
-    lock2 = multiprocessing.Lock()
-
-    vlock1 = VLock(lock1)
-    vlock2 = VLock(lock2)
-    vlock3 = VLock(lock1)
-    vlock4 = VLock(lock2)
-
+    vlock1 = VLock()
+    vlock2 = VLock()
 
     p1, c1 = VPipe()
     p2, c2 = VPipe()
@@ -1735,7 +1478,7 @@ def selectSharedLockTwoLockedProducersTwoConsumersTest(iterations, outputdir="vt
             ),
             VProcess(
                 target=selectSharedLockTwoLockedProducersTwoConsumers, 
-                args=(c1, c2, p3, p4, vlock3, vlock4, vs, iterations, outputdir),
+                args=(c1, c2, p3, p4, vlock1, vlock2, iterations, outputdir),
                 name="DS"
             ),
             VProcess(
@@ -1749,24 +1492,15 @@ def selectSharedLockTwoLockedProducersTwoConsumersTest(iterations, outputdir="vt
                 name="c2"
             )]
 
-    locks = [vlock1, vlock2, vlock3, vlock4]
+    locks = [vlock1, vlock2]
     connections = [p1, c1, p2, c2, p3, c3, p4, c4]
-    selects = [vs]
 
-    return processes, connections, locks, selects
+    return processes, connections, locks
 
 def selectSharedLockTwoLockedProducersTwoConsumersTest2(iterations, outputdir="vtest/"):
     
-    #vs = VSelect(name="vselector")
-
-    lock1 = multiprocessing.Lock()
-    lock2 = multiprocessing.Lock()
-
-    vlock1 = VLock(lock1)
-    vlock2 = VLock(lock2)
-    #vlock3 = VLock(lock1)
-    #vlock4 = VLock(lock2)
-
+    vlock1 = VLock()
+    vlock2 = VLock()
 
     p1, c1 = VPipe()
     p2, c2 = VPipe()
@@ -1801,136 +1535,19 @@ def selectSharedLockTwoLockedProducersTwoConsumersTest2(iterations, outputdir="v
             )]
 
     locks = [vlock1, vlock2]
-    #locks = [vlock1, vlock2, vlock3, vlock4]
+
     connections = [p1, c1, p2, c2, p3, c3, p4, c4]
-    #selects = [vs]
 
     return processes, connections, locks
 
-
 def complexTest(iterations, outputdir="vtest/"):
     
-    vs1 = VSelect(name="s1")
-    vs2 = VSelect(name="s2")
-    vs3 = VSelect(name="s3")
-
-    lock1 = multiprocessing.Lock()
-    lock2 = multiprocessing.Lock()
-    lock3 = multiprocessing.Lock()
-    lock4 = multiprocessing.Lock()
-    lock5 = multiprocessing.Lock()
-
-    vlock11 = VLock(lock1)
-    vlock12 = VLock(lock1)
-    vlock21 = VLock(lock2)
-    vlock22 = VLock(lock2)
-    vlock31 = VLock(lock3)
-    vlock32 = VLock(lock3)
-    vlock41 = VLock(lock4)
-    vlock42 = VLock(lock4)
-    vlock51 = VLock(lock5)
-    vlock52 = VLock(lock5)
-
-
-    p1, c1 = VPipe()
-    p2, c2 = VPipe()
-    p3, c3 = VPipe()
-    p4, c4 = VPipe()
-    p5, c5 = VPipe()
-    p6, c6 = VPipe()
-    p7, c7 = VPipe()
-    p8, c8 = VPipe()
-    p9, c9 = VPipe()
-    p10, c10 = VPipe()
-
-    processes = [
-            VProcess(
-                target=lockedProducer, 
-                args=(p1,vlock21, iterations, outputdir),
-                name="p1"
-            ),
-            VProcess(
-                target=lockedProducer, 
-                args=(p2,vlock22, iterations, outputdir),
-                name="p2"
-            ),
-            VProcess(
-                target=lockedProducer, 
-                args=(p3,vlock31, iterations, outputdir),
-                name="p3"
-            ),
-            VProcess(
-                target=lockedProducer, 
-                args=(p4,vlock32, iterations, outputdir),
-                name="p4"
-            ),
-            VProcess(
-                target=selectSharedLockTwoLockedProducersTwoConsumers, 
-                args=(c1, c2, p5, p6, vlock11, vlock51, vs1, iterations),
-                name="DS1"
-            ),
-            VProcess(
-                target=selectSharedLockTwoLockedProducersTwoConsumers, 
-                args=(c3, c4, p7, p8, vlock41, vlock52, vs2, iterations),
-                name="DS2"
-            ),
-            VProcess(
-                target=selectSharedLockTwoLockedProducersTwoConsumers, 
-                args=(c6, c7, p9, p10, vlock12, vlock42, vs3, iterations),
-                name="DS3"
-            ),
-            VProcess(
-                target=consumer, 
-                args=(c5, iterations, outputdir),
-                name="c1"
-            ),
-            VProcess(
-                target=consumer, 
-                args=(c9, iterations, outputdir),
-                name="c2"
-            ),
-            VProcess(
-                target=consumer, 
-                args=(c10, iterations, outputdir),
-                name="c3"
-            ),
-            VProcess(
-                target=consumer, 
-                args=(c8, iterations, outputdir),
-                name="c4"
-            )
-            ]
-
-    locks = [vlock11, vlock12, vlock21, vlock22, vlock31, vlock32, vlock41, vlock42, vlock51, vlock52]
-    connections = [p1, c1, p2, c2, p3, c3, p4, c4, p5, c5, p6, c6, p7, c7, p8, c8, p9, c9, p10, c10]
-    selects = [vs1, vs2, vs3]
-
-    return processes, connections, locks, selects
-
-def complexTest2(iterations, outputdir="vtest/"):
+    vlock1 = VLock()
+    vlock2 = VLock()
+    vlock3 = VLock()
+    vlock4 = VLock()
+    vlock5 = VLock()
     
-    vs1 = VSelect(name="s1")
-    vs2 = VSelect(name="s2")
-    vs3 = VSelect(name="s3")
-
-    lock1 = multiprocessing.Lock()
-    lock2 = multiprocessing.Lock()
-    lock3 = multiprocessing.Lock()
-    lock4 = multiprocessing.Lock()
-    lock5 = multiprocessing.Lock()
-
-    vlock11 = VLock(lock1)
-    #vlock12 = VLock(lock1)
-    vlock21 = VLock(lock2)
-    #vlock22 = VLock(lock2)
-    vlock31 = VLock(lock3)
-    #vlock32 = VLock(lock3)
-    vlock41 = VLock(lock4)
-    #vlock42 = VLock(lock4)
-    vlock51 = VLock(lock5)
-    #vlock52 = VLock(lock5)
-
-
     p1, c1 = VPipe()
     p2, c2 = VPipe()
     p3, c3 = VPipe()
@@ -1945,37 +1562,37 @@ def complexTest2(iterations, outputdir="vtest/"):
     processes = [
             VProcess(
                 target=lockedProducer, 
-                args=(p1,vlock21, iterations, outputdir),
+                args=(p1,vlock2, iterations, outputdir),
                 name="p1"
             ),
             VProcess(
                 target=lockedProducer, 
-                args=(p2,vlock21, iterations, outputdir),
+                args=(p2,vlock2, iterations, outputdir),
                 name="p2"
             ),
             VProcess(
                 target=lockedProducer, 
-                args=(p3,vlock31, iterations, outputdir),
+                args=(p3,vlock3, iterations, outputdir),
                 name="p3"
             ),
             VProcess(
                 target=lockedProducer, 
-                args=(p4,vlock31, iterations, outputdir),
+                args=(p4,vlock3, iterations, outputdir),
                 name="p4"
             ),
             VProcess(
                 target=selectSharedLockTwoLockedProducersTwoConsumers2, 
-                args=(c1, c2, p5, p6, vlock11, vlock51, iterations),
+                args=(c1, c2, p5, p6, vlock1, vlock5, iterations),
                 name="DS1"
             ),
             VProcess(
                 target=selectSharedLockTwoLockedProducersTwoConsumers2, 
-                args=(c3, c4, p7, p8, vlock41, vlock51, iterations),
+                args=(c3, c4, p7, p8, vlock4, vlock5, iterations),
                 name="DS2"
             ),
             VProcess(
                 target=selectSharedLockTwoLockedProducersTwoConsumers2, 
-                args=(c6, c7, p9, p10, vlock11, vlock41, iterations),
+                args=(c6, c7, p9, p10, vlock1, vlock4, iterations),
                 name="DS3"
             ),
             VProcess(
@@ -2000,28 +1617,20 @@ def complexTest2(iterations, outputdir="vtest/"):
             )
             ]
 
-    locks = [vlock11, vlock21, vlock31, vlock41, vlock51]
+    locks = [vlock1, vlock2, vlock3, vlock4, vlock5]
+
     connections = [p1, c1, p2, c2, p3, c3, p4, c4, p5, c5, p6, c6, p7, c7, p8, c8, p9, c9, p10, c10]
-    #selects = [vs1, vs2, vs3]
 
-    return processes, connections, locks, selects
-
-
-
-
+    return processes, connections, locks
 
 def selectMultipleLockedProducersConsumersTest(iterations, outputdir="vtest/"):
     
-    vs = VSelect(name="vselector")
-
-    lock1 = multiprocessing.Lock()
-
-    vlock1 = VLock(lock1)
-    vlock2 = VLock(lock1)
-    vlock3 = VLock(lock1)
-    vlock4 = VLock(lock1)
-    vlock5 = VLock(lock1)
-    vlock6 = VLock(lock1)
+    vlock1 = VLock()
+    vlock2 = VLock()
+    vlock3 = VLock()
+    vlock4 = VLock()
+    vlock5 = VLock()
+    vlock6 = VLock()
 
     p1, c1 = VPipe()
     p2, c2 = VPipe()
@@ -2072,7 +1681,7 @@ def selectMultipleLockedProducersConsumersTest(iterations, outputdir="vtest/"):
             ),
             VProcess(
                 target=selectVariableProducersConsumers1, 
-                args=(in_connections, out_connections, vs, 6, iterations),
+                args=(in_connections, out_connections, 6, iterations),
                 name="DS"
             ),
             VProcess(
@@ -2108,22 +1717,17 @@ def selectMultipleLockedProducersConsumersTest(iterations, outputdir="vtest/"):
 
     locks = [vlock1, vlock2, vlock3, vlock4, vlock5, vlock6]
     connections = [p1, c1, p2, c2, p3, c3, p4, c4, p5, c5, p6, c6, p7, c7, p8, c8, p9, c9, p10, c10, p11, c11, p12, c12]
-    selects = [vs]
 
     return processes, connections, locks, selects
 
 def selectMultipleProducersConsumersTest(iterations, outputdir="vtest/"):
     
-    vs = VSelect(name="vselector")
-
-    lock1 = multiprocessing.Lock()
-
-    vlock1 = VLock(lock1)
-    vlock2 = VLock(lock1)
-    vlock3 = VLock(lock1)
-    vlock4 = VLock(lock1)
-    vlock5 = VLock(lock1)
-    vlock6 = VLock(lock1)
+    vlock1 = VLock()
+    vlock2 = VLock()
+    vlock3 = VLock()
+    vlock4 = VLock()
+    vlock5 = VLock()
+    vlock6 = VLock()
 
     p1, c1 = VPipe()
     p2, c2 = VPipe()
@@ -2174,7 +1778,7 @@ def selectMultipleProducersConsumersTest(iterations, outputdir="vtest/"):
             ),
             VProcess(
                 target=selectVariableProducersConsumers1, 
-                args=(in_connections, out_connections, vs, 6, iterations),
+                args=(in_connections, out_connections, 6, iterations),
                 name="DS"
             ),
             VProcess(
@@ -2208,11 +1812,184 @@ def selectMultipleProducersConsumersTest(iterations, outputdir="vtest/"):
                 name="c12"
             )]
 
-    locks = [vlock1, vlock2, vlock3, vlock4, vlock5, vlock6]
     connections = [p1, c1, p2, c2, p3, c3, p4, c4, p5, c5, p6, c6, p7, c7, p8, c8, p9, c9, p10, c10, p11, c11, p12, c12]
-    selects = [vs]
 
     return processes, connections, selects
+
+def nestedLocksSelectTest(iterations):
+
+    lock1 = VLock()
+    lock2 = VLock()
+    lock3 = VLock()
+
+    locks = [lock1, lock2, lock3] 
+
+    p1, c1 = VPipe()
+    p2, c2 = VPipe()
+    p3, c3 = VPipe()
+
+    channels = [p1, c1, p2, c2, p3, c3]
+
+    processes = [
+            VProcess(
+                    target=nestedLockedSelect, 
+                    args=(lock1, lock2, lock3, c1, c2, c3, iterations + 1),
+                    ),
+            VProcess(
+                    target=producer, 
+                    args=(p1, iterations), 
+                    ),
+            VProcess(
+                    target=producer, 
+                    args=(p2, iterations), 
+                    ),
+            VProcess(
+                    target=producer, 
+                    args=(p3, iterations), 
+                    )
+                 ]
+    
+    return processes, channels, locks
+
+def nestedLocksTest1(iterations):
+    lock1 = VLock()
+    lock2 = VLock()
+    lock3 = VLock()
+    lock4 = VLock()
+    
+    locks = [lock1, lock2, lock3, lock4] 
+
+    p1, c1 = VPipe()
+    p2, c2 = VPipe()
+    p3, c3 = VPipe()
+    p4, c4 = VPipe()
+
+    channels = [p1, c1, p2, c2, p3, c3, p4, c4]
+
+    processes = [
+            VProcess(
+                    target=veryLockedProducer, 
+                    args=(locks, p1, iterations), 
+                    ),
+            VProcess(
+                    target=veryLockedProducer, 
+                    args=(locks, p2, iterations), 
+                    ),
+            VProcess(
+                    target=veryLockedProducer, 
+                    args=(locks, p3, iterations), 
+                    ),
+            VProcess(
+                    target=veryLockedProducer, 
+                    args=(locks, p4, iterations), 
+                    ),
+            VProcess(
+                    target=consumer, 
+                    args=(c1, iterations), 
+                    ),
+            VProcess(
+                    target=consumer, 
+                    args=(c2, iterations), 
+                    ),
+            VProcess(
+                    target=consumer, 
+                    args=(c3, iterations), 
+                    ),
+            VProcess(
+                    target=consumer, 
+                    args=(c4, iterations), 
+                    )
+                 ]
+    
+    return processes, channels, locks
+
+def nestedLocksTest2(iterations):
+
+    lock1 = VLock()
+    lock2 = VLock()
+    lock3 = VLock()
+
+    locks = [lock1, lock2, lock3] 
+
+    p1, c1 = VPipe()
+    p2, c2 = VPipe()
+    p3, c3 = VPipe()
+    p4, c4 = VPipe()
+
+    channels = [p1, c1, p2, c2, p3, c3, p4, c4]
+
+    processes = [
+            VProcess(
+                    target=veryLockedProducer2, 
+                    args=(lock1, lock2, lock3, p1, iterations), 
+                    ),
+            VProcess(
+                    target=veryLockedProducer2, 
+                    args=(lock1, lock2, lock3, p2, iterations), 
+                    ),
+            VProcess(
+                    target=veryLockedProducer2, 
+                    args=(lock1, lock2, lock3, p3, iterations), 
+                    ),
+            VProcess(
+                    target=veryLockedProducer2, 
+                    args=(lock1, lock2, lock3, p4, iterations), 
+                    ),
+            VProcess(
+                    target=consumer, 
+                    args=(c1, iterations), 
+                    ),
+            VProcess(
+                    target=consumer, 
+                    args=(c2, iterations), 
+                    ),
+            VProcess(
+                    target=consumer, 
+                    args=(c3, iterations), 
+                    ),
+            VProcess(
+                    target=consumer, 
+                    args=(c4, iterations), 
+                    )
+                 ]
+    
+    return processes, channels, locks
+
+def nestedLocksTest3(iterations):
+
+    lock1 = VLock()
+    lock2 = VLock()
+    lock3 = VLock()
+    lock4 = VLock()
+    lock5 = VLock()
+
+    locks = [lock1, lock2, lock3, lock4, lock5] 
+
+    p1, c1 = VPipe()
+    p2, c2 = VPipe()
+    
+    channels = [p1, c1, p2, c2]
+
+    processes = [
+            VProcess(
+                    target=veryLockedProducer3, 
+                    args=(lock1, lock2, lock3, p1, iterations), 
+                    ),
+            VProcess(
+                    target=veryLockedProducer4, 
+                    args=(lock4, lock5, lock3, p2, iterations), 
+                    ),
+            VProcess(
+                    target=consumer, 
+                    args=(c1, iterations), 
+                    ),
+            VProcess(
+                    target=consumer, 
+                    args=(c2, iterations), 
+                    )
+                 ]
+    
+    return processes, channels, locks
 
 def multipleSimpleConnectionsTest(iterations, outputdir="vtest/"):
     p = []
@@ -2240,6 +2017,29 @@ def multipleSimpleConnectionsTest(iterations, outputdir="vtest/"):
     
     return processes, channels
 
+def multipleNestedLocksTest(iterations, outputdir="vtest/"):
+    p = []
+    c = []
+    l = []
+
+    processes, channels, locks = nestedLocksTest1(iterations)
+    p.extend(processes)
+    c.extend(channels)
+    l.extend(locks)
+    processes, channels, locks = nestedLocksTest2(iterations)
+    p.extend(processes)
+    c.extend(channels)
+    l.extend(locks)
+    processes, channels, locks = nestedLocksTest3(iterations)
+    p.extend(processes)
+    c.extend(channels)
+    l.extend(locks)
+
+    processes, channels, locks = p, c, l
+    
+    return processes, channels, locks
+
+
 outputdir = "vtest/"
 if os.path.exists(outputdir):
     shutil.rmtree(outputdir)    
@@ -2248,11 +2048,7 @@ os.mkdir(outputdir)
 locks = []
 selects = []
 
-#processes, channels, locks = nestedLocksTest(4)
-#processes, channels, locks = nestedLocksTest2(4)
-processes, channels, locks = nestedLocksSelectTest(2)
-
-#Test 1
+# Test 1
 #processes, channels = multipleSimpleConnectionsTest(5, outputdir)
 
 # Test 2
@@ -2271,15 +2067,27 @@ processes, channels, locks = nestedLocksSelectTest(2)
 #processes, channels, locks, selects = selectMultipleLockedProducersConsumersTest(50, outputdir) # This one will end in an error from the manager. But writes the correct output.
 
 # Test 7
-#processes, channels, locks, selects = complexTest2(5, outputdir)
+#processes, channels, locks = complexTest(2, outputdir)
 
-vmanager = VManager(processes, channels, locks, selects, outputFormat="png", interactiveLocks=False, draw=True, terminateProcesses=True)
-#
+# Test 8
+#processes, channels, locks = nestedLocksTest1(4)
+
+# Test 9
+#processes, channels, locks = nestedLocksTest2(4)
+
+# Test 10
+#processes, channels, locks = nestedLocksTest3(4)
+
+# Test 11
+processes, channels, locks = nestedLocksSelectTest(2)
+
+# Test 12
+#processes, channels, locks = multipleNestedLocksTest(4)
+
+vmanager = VManager(processes, channels, locks, outputFormat="png", logging=True, interactiveLocks=False, draw=True, terminateProcesses=True, tickTock=True)
+
 vmanager.init_graph()
 vmanager.start()
 
 #vmanager.stepwiseTicks(processes) # uncomment this line and comment the one below for stepwise execution, if draw is disabled, you can choose when to draw the graph by typing in 'd'
 vmanager.runTicksToEnd(processes)
-#VSelect.dict = vmanager.processToManagerSendConn
-#VSelect.string = "hej hej"
-#VSelect.test2()
