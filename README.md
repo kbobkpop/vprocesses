@@ -1,5 +1,5 @@
 # vprocesses
-This package visualizes concurrent programs.  
+This a package for visualizing concurrent programs.
 
 It is a small partial wrapper to the standard python multiprocessing module which is also required to run.
 
@@ -17,8 +17,6 @@ from vprocesses import VSelect as select
 ```
 This allows the standard <code>select.select()</code> syntax.
 
-*select only supports the first of the three parameters of the standard select.select().
-
 When you have defined all your Processes, Locks and Connections they should be passed to the VManager() which can be instantiated like this multiprocessing.VManager() based on the above mentioned import statement.
 
 Having instantiated a VManager, you need to call <code>.start()</code> on the object in order to initalize the graph and start the processes.
@@ -34,15 +32,19 @@ Ticks are defined as each process reaching a synchronization point. If a process
 
 This definition is perhaps a bit arbitrary, and I am considering to change it in the future, but it was chosen to give a good visualization, which hopefully can aid in understanding concurrent systems and concurrent programming.
 
-##### Optional Parameters
+##### Options for VManager
 Optional parameters for the constructor of the VManager:
  - logging: True/False (default: False) - If True a logfile is created and written to in each tick.
  - logFile: name of the log file (default: 'log.txt')
  - output: path for the output of the drawings (default: 'output/Tick')
  - interactiveLocks: True/False (default: False) - If True, the user can decided which process acquires a lock.
  - draw: True/False (default: True) - If True, renders are made automatically at the end of each tick.
- - tickTock: True/False (default: True) - If True, transmission will at the earliest complete the tick after the sending process reaches it's .send() point. If False (beta) transmission will happen as soon as the sending and receiving side is ready. This works but I am not sure if I like the visualization it produces currently.
- - incrTicks: True/False (default: True). If True, a tick counter will be incremented each tick resulting in drawings with a new tick suffix. If False, ticks will not be incremented, and the same image will be overwritten each tick. This can be used with the .stepwiseTicks() method call to iteratively show the progression of the system withouth having to browse through images.
+ - tickTock: True/False (default: True) - If True, transmission will at the earliest complete the tick after the sending process reaches it's <code>.send()<\code> point. If False (beta) transmission will happen as soon as the sending and receiving side is ready. This works but I am not sure if I like the visualization it produces currently.
+ - incrTicks: True/False (default: True). If True, a tick counter will be incremented each tick resulting in drawings with a new tick suffix. If False, ticks will not be incremented, and the same image will be overwritten each tick. This can be used with the <code>.stepwiseTicks()</code> method call to iteratively show the progression of the system withouth having to browse through images.
+
+#### Limitations
+ - When calling the <code>vprocesses.Pipe()<\code>, <bold> the first returned connection is the sending end of the channel, the second is the receiving end </code>. Used otherwise will result in undefined behaviour.
+ - VSelect only supports the first parameter, <code>rlist</code> of the standard <code>select.select()</code>. To maintain syntax similarity to the standard <code>select.select()<\code> you can pass <code>xlist<\code>, <code>wlist<\code> and <code>timeout<\code> but they will have no effect.
 
 ##### Dependencies:
 
