@@ -1,20 +1,20 @@
 This package visualizes concurrent programs.  
 
-It is a small partial wrapper to the standard python multiprocessing module which is required to run.
+It is a small partial wrapper to the standard python multiprocessing module which is also required to run.
 
 It has been implemented to use the same syntax as the multiprocessing module.
 
 By importing the package as an alias to multiprocessing like this:
-
+```python
 import vprocesses as multiprocessing
-
-You are able to instantiate Processes, call Pipe() and Lock() and use the objects as you would with the normal multiprocessing module.
+```
+You are able to instantiate Processes, call <code>Pipe()<\code> and `Lock()`{:.python} and use the objects as you would with the normal multiprocessing module.
 
 Calls to select are also possible either through multiprocessing.VSelect.select() or by simply importing VSelect as select like this:
-
+```python
 from vprocesses import VSelect as select
-
-This allows the standard select.select() syntax.
+```
+This allows the standard `select.select()`{:.python} syntax.
 
 *select only supports the first of the three parameters of the standard select.select().
 
