@@ -51,7 +51,7 @@ Optional parameters for the constructor of the VManager:
  - incrTicks: True/False (default: True). If True, a tick counter will be incremented each tick resulting in drawings with a new tick suffix. If False, ticks will not be incremented, and the same image will be overwritten each tick. This can be used with the <code>.stepwiseTicks()</code> method call to iteratively show the progression of the system withouth having to browse through images.
 
 ### Limitations
- - When calling the <code>vprocesses.Pipe()<\code>, <bold> the first returned connection is the sending end of the channel, the second is the receiving end </code>. Used otherwise will result in undefined behaviour.
+ - When calling the <code>vprocesses.Pipe()</code>, <bold> the first returned connection is the sending end of the channel, the second is the receiving end </code>. Used otherwise will result in undefined behaviour.
  - VSelect only supports the first parameter, <code>rlist</code> of the standard <code>select.select()</code>. To maintain syntax similarity to the standard <code>select.select()</code> you can pass <code>xlist</code>, <code>wlist</code> and <code>timeout</code> but they will have no effect.
  - If you create a system that could deadlock using the multiprocessing library, it can also deadlock using this module. The deadlock will in fact most likely show earlier as the channels simulated to be unbuffered in the vprocesses implementation.
 
