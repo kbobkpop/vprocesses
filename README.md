@@ -52,8 +52,9 @@ $ pip install graphviz
 
 Example 1:
 
-A producer process is producing integer and sending them to a consumer process. The outline of the nodes being red, indicate that both processes are blocking and the '0' next to the edge indicates that the integer 0 is is being sent by p1. 
+![alt text](https://github.com/kbobkpop/vprocesses/blob/master/vprocesses/producerConsumerTest/Tick_1.png?raw=true)
 
+A producer process is producing integer and sending them to a consumer process. The outline of the nodes being red, indicate that both processes are blocking and the '0' next to the edge indicates that the integer 0 is is being sent by p1. 
 
 Example 2:
 
