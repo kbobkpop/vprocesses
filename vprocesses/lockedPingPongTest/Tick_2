@@ -1,0 +1,16 @@
+digraph {
+	label="Tick 2" labelloc=t
+	Albert [label=Albert color=red style=solid]
+	Bertha [label=Bertha color=red style=solid]
+	Cindy [label=Cindy color=green style=solid]
+	Dennis [label=Dennis color=green style=solid]
+	Albert -> Bertha [label=" "]
+	Bertha -> Albert [label=" "]
+	Cindy -> Dennis [label=" "]
+	Dennis -> Cindy [label=" "]
+	lock1 [shape=square]
+	lock1 -> Albert [color=purple dir=none style=dashed]
+	lock1 -> Bertha [color=black dir=none style=dashed]
+	lock1 -> Cindy [color=blue dir=none style=solid]
+	lock1 -> Dennis [color=black dir=none style=dashed]
+}

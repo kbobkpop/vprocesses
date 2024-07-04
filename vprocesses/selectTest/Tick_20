@@ -1,0 +1,16 @@
+digraph {
+	label="Tick 20" labelloc=t
+	p1 [label="p1☠️" color=black style=bold]
+	p2 [label="p2☠️" color=black style=bold]
+	p3 [label="p3☠️" color=black style=bold]
+	s1 [label="s1☠️" color=black style=bold]
+	c1 [label="c1☠️" color=black style=bold]
+	c2 [label="c2☠️" color=black style=bold]
+	c3 [label="c3☠️" color=black style=bold]
+	p1 -> s1 [label=" "]
+	p2 -> s1 [label=" "]
+	p3 -> s1 [label=" "]
+	s1 -> c1 [label=" "]
+	s1 -> c2 [label=" "]
+	s1 -> c3 [label=" "]
+}
