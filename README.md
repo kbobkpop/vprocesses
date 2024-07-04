@@ -48,7 +48,7 @@ Dependencies:
 
 To install graphviz 0.20.3 use pip to install:
 
-$ pip install graphviz
+<code>$ pip install graphviz</code>
 
 Example 1:
 
