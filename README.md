@@ -51,6 +51,7 @@ To install graphviz 0.20.3 use pip to install:
 $ pip install graphviz
 
 Example 1:
+
 ![alt text](https://github.com/kbobkpop/vprocesses/blob/master/vprocesses/producerConsumerTest/Tick_0.png?raw=true)
 ![alt text](https://github.com/kbobkpop/vprocesses/blob/master/vprocesses/producerConsumerTest/Tick_1.png?raw=true)
 ![alt text](https://github.com/kbobkpop/vprocesses/blob/master/vprocesses/producerConsumerTest/Tick_2.png?raw=true)
@@ -59,9 +60,18 @@ A producer process is producing integer and sending them to a consumer process. 
 
 Example 2:
 
+![alt text](https://github.com/kbobkpop/vprocesses/blob/master/vprocesses/lockedPingPongTest/Tick_0.png?raw=true)
+![alt text](https://github.com/kbobkpop/vprocesses/blob/master/vprocesses/lockedPingPongTest/Tick_1.png?raw=true)
+![alt text](https://github.com/kbobkpop/vprocesses/blob/master/vprocesses/lockedPingPongTest/Tick_2.png?raw=true)
+
+
 A slightly more complex example of the four processes Albert, Bertha, Charlie and Dennis which parwise are sending the strings 'Hello' and 'Hi' back and forth. Though before sending they are required to acquire the shared lock, lock1. A connection from a process to a lock is indicated by black dashed edge. If the lock is acquired by a process the edge is solid and blue and if a process is waiting to acquire a lock the edge is dashed and purple.
 
 Example 3:
+
+![alt text](https://github.com/kbobkpop/vprocesses/blob/master/vprocesses/selectTest/Tick_0.png?raw=true)
+![alt text](https://github.com/kbobkpop/vprocesses/blob/master/vprocesses/selectTest/Tick_1.png?raw=true)
+![alt text](https://github.com/kbobkpop/vprocesses/blob/master/vprocesses/selectTest/Tick_2.png?raw=true)
 
 In this example there is one node, s1, which is waiting at a select call, indiciated by the dashed red outline, until something is on one of the channels leading towards it.
 
