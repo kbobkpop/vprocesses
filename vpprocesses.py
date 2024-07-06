@@ -9,8 +9,6 @@ import random
 # Nested release and acquire calls on different locks are resolved in the same tick
 # Same for nested select calls if something is being sent on one of the channels that are being listened on
 
-#does it work with a single lock not in a list?
-
 class VManager():
     def __init__(self, vprocesses, vconnections, vlocks=[], logging=False, output='output/Tick', outputFormat='pdf', interactiveLocks=False, logFileName="log.txt", draw=True, tickTock=True, incrTicks=True) -> None:
         self.processes = vprocesses # List of VProcess passed as to the class constructor as argument

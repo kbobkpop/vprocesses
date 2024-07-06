@@ -1,6 +1,0 @@
-digraph {
-	label="Tick 5" labelloc=t
-	p0 [label=p0 color=red style=solid]
-	p1 [label=p1 color=red style=solid]
-	p0 -> p1 [label=2]
-}
