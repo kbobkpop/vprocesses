@@ -5,8 +5,8 @@ current = os.path.dirname(os.path.realpath(__file__))
 parent = os.path.dirname(current)
 sys.path.append(parent)
 
-import vpprocesses as multiprocessing
-from vpprocesses import VManager
+import vprocesses as multiprocessing
+from vprocesses import VManager
 
 
 def lockedPingPong(lock, out_conn, in_conn, iterations, initial_data=""):

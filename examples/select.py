@@ -5,9 +5,9 @@ current = os.path.dirname(os.path.realpath(__file__))
 parent = os.path.dirname(current)
 sys.path.append(parent)
 
-import vprocesses.vpprocesses as multiprocessing
-from vprocesses.vpprocesses import VManager
-from vprocesses.vpprocesses import VSelect as select
+import vprocesses as multiprocessing
+from vprocesses import VManager
+from vprocesses import VSelect as select
 
 def producer(conn, iterations):
     for i in range(iterations):

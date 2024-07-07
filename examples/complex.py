@@ -6,9 +6,9 @@ parent = os.path.dirname(current)
 sys.path.append(parent)
 
 import random
-import vpprocesses as multiprocessing
-from vpprocesses import VManager
-from vpprocesses import VSelect as select
+import vprocesses as multiprocessing
+from vprocesses import VManager
+from vprocesses import VSelect as select
 
 def lockedProducer(conn, lock, iterations):
     for i in range(iterations):
