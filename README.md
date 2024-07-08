@@ -29,7 +29,7 @@ Which is following the above <code>import vprocesses as multiprocessing</code> s
 
 Having instantiated a VManager, you need to call <code>.start()</code> on the object in order to initalize the graph and start the processes.
 
-You can now run a tick by calling <code>.runAllToTick()</code> with the list of processes as argument.
+You can now run a tick by calling <code>.runAllToTick()</code> with the list of processes as argument. This call returns a list of able processes which should be passed as argument for the next tick.  
 
 You can also call <code>.stepwiseTicks()</code> also with the list of processes to interactively running ticks by pressing 'enter' after each tick.
 
