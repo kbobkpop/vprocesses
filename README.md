@@ -25,7 +25,7 @@ locks = [lock1, lock2]
 
 vm = multiprocessing.VManager(processes, connections, locks)
 ```
-Which is following the above state <code>import vprocesses as multiprocessing</code> statement.
+Which is following the above <code>import vprocesses as multiprocessing</code> statement.
 
 Having instantiated a VManager, you need to call <code>.start()</code> on the object in order to initalize the graph and start the processes.
 
