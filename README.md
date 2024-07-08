@@ -53,7 +53,7 @@ Optional parameters for the constructor of the VManager:
 ### Limitations
  - When calling the <code>vprocesses.Pipe()</code>, <bold> the first returned connection is the sending end of the channel, the second is the receiving end </code>. Used otherwise will result in undefined behaviour.
  - VSelect only supports the first parameter, <code>rlist</code> of the standard <code>select.select()</code>. To maintain syntax similarity to the standard <code>select.select()</code> you can pass <code>xlist</code>, <code>wlist</code> and <code>timeout</code> but they will have no effect.
- - If you create a system that could deadlock using the multiprocessing library, it can also deadlock using this module. The deadlock will in fact most likely show earlier as the channels simulated to be unbuffered in the vprocesses implementation.
+ - If you create a system that could deadlock using the multiprocessing library, it can also deadlock using this module. The deadlock will in fact most likely show earlier as the channels are simulated to be unbuffered in the vprocesses implementation.
 
 ### Dependencies:
 
