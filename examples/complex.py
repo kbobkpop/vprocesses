@@ -124,6 +124,6 @@ processes = [
 connections = [p1, c1, p2, c2, p3, c3, p4, c4, p5, c5, p6, c6, p7, c7, p8, c8, p9, c9, p10, c10]
 locks = [vlock1, vlock2, vlock3, vlock4, vlock5]
 
-vm = VManager(processes, connections, locks, outputFormat='png')
+vm = VManager(processes, connections, locks, outputFormat='png', tickTock=True)
 vm.start()
 vm.runTicksToEnd(processes)

@@ -22,6 +22,6 @@ p1, c1 = multiprocessing.Pipe()
 processes = [multiprocessing.Process(target=producer, args=(p1, 3)),
              multiprocessing.Process(target=consumer, args=(c1, 3))]
 
-vm = VManager(processes, [p1, c1], outputFormat='png')
+vm = VManager(processes, [p1, c1], outputFormat='png', tickTock=True)
 vm.start()
 vm.runTicksToEnd(processes)
