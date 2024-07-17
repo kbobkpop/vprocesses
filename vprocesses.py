@@ -2,6 +2,7 @@ import multiprocessing
 import select
 import graphviz
 import random
+import time
 
 # VConnections no longer have separate connections but have the connections of their VProcess which are assigned upon initialization of the manager 
 # No need for select objects
@@ -10,7 +11,7 @@ import random
 # Same for nested select calls if something is being sent on one of the channels that are being listened on
 
 class VManager():
-    def __init__(self, vprocesses, vconnections, vlocks=[], logging=False, output='output/Tick', outputFormat='pdf', interactiveLocks=False, logFileName="log.txt", draw=True, tickTock=True, incrTicks=True) -> None:
+    def __init__(self, vprocesses, vconnections, vlocks=[], logging=False, output='output/', outputFormat='pdf', interactiveLocks=False, logFileName="log.txt", draw=True, tickTock=True, incrTicks=True) -> None:
         self.processes = vprocesses # List of VProcess passed as to the class constructor as argument
         self.connections = vconnections # List of VConnection classes passed to the class constructor as argument
         if type(vlocks) == VLock:
@@ -25,6 +26,7 @@ class VManager():
         self.tickCounter = 0 # Counter used for the number on the image file and showing which tick is run
         self.edges = [] # List of edges between processes for the graph used for drawing the image
         self.processNodes = [] # List of process nodes for the graph used for drawing the image
+        self.terminatedNodes = []
         self.lockNodes = [] # List of lock nodes for the graph used for drawing the image - Could possibly be merged with processNodes
         self.lockEdges = [] # List of edges between processes and locks for the graph used for drawing the image
         self.lockedLocks = [] # List of locks that are currently locked 
@@ -36,7 +38,7 @@ class VManager():
         self.prematureSelectSends = [] # List of sending processes that have been allowed to send because of an intervening select statment. However the processes are still not considered able, until the receiving sides have received on the channels.
         self.previousTickProcessCount = 0
         self.logging = logging
-        self.outputFileName = output
+        self.outputDirectory = output
         self.outputFormat = outputFormat
         self.interactive = interactiveLocks
         self.draw = draw
@@ -100,11 +102,11 @@ class VManager():
         self.tickCounter += 1
         print(f"Tick {self.tickCounter} started")
         
-        if self.previousTickProcessCount == 0 and len(processes) == 0:
+        if len(processes) == 0:
             print("Exiting - System is not progressing! - Either because of a deadlock, a process is blocking or a bug.")
             return False
         
-        self.previousTickProcessCount = len(processes)
+        #self.previousTickProcessCount = len(processes)
 
         releases, acquires, selects = self.getRequests(processes)
 
@@ -116,13 +118,24 @@ class VManager():
         self.waitingToAcquire = acquires
         self.waitingToSelect = selects
 
+        #print("waitingToSend: ", self.waitingToSend)
+        #print("prematureSelectSends: ", self.prematureSelectSends)
+        self.updateGraph2()
+        if self.draw:
+            self.drawGraph("Tick")
+
         updateNodesList = []
 
         updateEdgesList, updateNodesList = self.handleSend(updateNodesList)
 
         updateNodesList, updateEdgesList = self.handleReceive(updateEdgesList, updateNodesList)
 
-        self.updateGraph(updateNodesList, updateEdgesList)
+        #self.updateGraph(updateNodesList, updateEdgesList)
+        self.updateGraph2()
+
+        if self.tickTock:
+            if self.draw:
+                self.drawGraph("Tock")
 
         ableProcesses = self.getAbleProcesses()
     
@@ -158,6 +171,7 @@ class VManager():
                 self.fromToConnectionDict[conn].send(True)
                 self.processes.remove(process)
                 self.updateNode(process.name, "black", "bold", process.name + "☠️")
+                self.terminatedNodes.append(process.name)
                 process.join()
                 loglist.append(f"{process.name} requests to terminate")
             else:
@@ -187,10 +201,11 @@ class VManager():
         for request in self.waitingToSend:
             for edge in self.edges:
                 if edge[0] == request[0] and edge[1] == request[1]:
-                    if self.tickTock:
-                        condition = edge[2] == ' '
-                    else:
-                        condition = True
+                    #if not self.tickTock:
+                    #    condition = edge[2] == ' '
+                    #else:
+                    #    condition = True
+                    condition = True
                     if condition:
                         updateEdgesList.append([request[0], request[1], request[2]])
                         process = self.syncObjectProcessLookup[request[0]].name
@@ -213,15 +228,17 @@ class VManager():
             remove = False
             selectlist = pslct[2] 
             for conn in selectlist:
-                edge = self.getRecvEdge(conn.name)
-                if self.tickTock:
-                    condition = edge[2] != ' '
-                else:
-                    condition = True
+                #edge = self.getRecvEdge(conn.name)
+                #if not self.tickTock:
+                #    condition = edge[2] != ' '
+                #else:
+                #    condition = True
+                condition = True
                 if condition:
                     for wts in tmpSendList: #self.waitingToSend
                         if conn.name == wts[1]:
                             wts[3].send(True)
+                            process = self.syncObjectProcessLookup[wts[0]].name
                             remove = True
                             self.prematureSelectSends.append(wts) # These being appended before receive should not matter for handleReceive, as there should not be requests waiting to receive on the channel, as the selecting process will be the one receiving eventually.
                             self.waitingToSend.remove(wts) 
@@ -231,7 +248,9 @@ class VManager():
 
             if remove == True:
                 selected = True
+                time.sleep(0.1)
                 pslct[1].send(True)
+                process = self.syncObjectProcessLookup[wts[0]].name
                 process = self.getProcess(pslct[0])
                 rl, al, sl =self.getRequests([process])
                 newrl.extend(rl)
@@ -251,10 +270,11 @@ class VManager():
         for request in self.waitingToReceive:
             for currentedge in self.edges:
                 if currentedge[0] == request[0] and currentedge[1] == request[1]:
-                    if self.tickTock:
-                        condition = currentedge[2] != ' '
-                    else:
-                        condition = True
+                    #if not self.tickTock:
+                    #    condition = currentedge[2] != ' '
+                    #else:
+                    #    condition = True
+                    condition = True
                     if condition:
                         p1name = None
                         match = False
@@ -339,8 +359,11 @@ class VManager():
                         acquired = True
                         randIndex = random.randint(0, len(templist) - 1)
                         templist[randIndex][2].send(True)
+                        #print(f"{templist[randIndex][1]} acquired the lock")
                         process = self.getProcess(templist[randIndex][1])
+                        #print(f"process: {process}")
                         rl, al, sl = self.getRequests([process])
+                        #print("rl", rl, "al:", al, "sl:", sl)
                         newrl.extend(rl)
                         newal.extend(al)
                         newsl.extend(sl)
@@ -440,7 +463,7 @@ class VManager():
                     self.lockEdges.append([lock.name, process.name, "black", "dashed"])     
 
         if self.draw:
-            self.drawGraph()
+            self.drawGraph("Tock")
 
     def updateGraph(self, updateNodesList, updateEdgesList):
         
@@ -464,14 +487,55 @@ class VManager():
 
         for lock in self.lockedLocks:
             self.updateLockEdge(lock[0], lock[1], 'blue', 'solid')
-        
-        if self.draw:
-            self.drawGraph()
 
-    def drawGraph(self):
+    def updateGraph2(self):
+        
+        for node in self.processNodes:
+            color = "green"
+            for req in self.waitingToSend:
+                if node[0] == self.syncObjectProcessLookup[req[0]].name:
+                    color = "red"
+            for req in self.prematureSelectSends:
+                if node[0] == self.syncObjectProcessLookup[req[0]].name:
+                    color = "red"
+            for term in self.terminatedNodes:
+                if node[0] == term:
+                     color = "black"
+            for req in self.waitingToReceive:
+                if node[0] == self.syncObjectProcessLookup[req[1]].name:
+                    color = "red"
+            
+            node[1] = color
+            node[2] = 'solid'
+            #self.updateNode(node[0], color, 'solid', node[3])
+
+        for edge in self.edges:
+            new_edge = " "
+            for req in self.waitingToSend:
+                if edge[0] == req[0]:
+                    new_edge = req[2]
+            for pms in self.prematureSelectSends:
+                if edge[0] == pms[0]:
+                    new_edge = pms[2]
+            edge[2] = new_edge
+
+        for node in self.waitingToSelect:
+            self.updateNode(node[0], 'red', 'dashed', node[0])
+
+        for edge in self.lockEdges:
+            self.updateLockEdge(edge[0], edge[1], 'black', 'dashed')
+        
+        for request in self.waitingToAcquire:
+            self.updateNode(request[1], 'purple', 'dashed', request[1])
+            self.updateLockEdge(request[0], request[1], 'purple', 'dashed')
+        
+        for lock in self.lockedLocks:
+            self.updateLockEdge(lock[0], lock[1], 'blue', 'solid')
+        
+    """ def drawGraph(self, id):
 
         dgraph = graphviz.Digraph(format=self.outputFormat)
-        dgraph.attr(label=f"Tick {self.tickCounter}", labelloc="t")
+        dgraph.attr(label=f"{id} {self.tickCounter}", labelloc="t")
 
         for node in self.processNodes: # Format: [process name, color, style, label]
             dgraph.node(node[0], color=node[1], style=node[2], label=node[3])
@@ -488,9 +552,36 @@ class VManager():
             dgraph.edge(edge[0], edge[1], color=edge[2], style=edge[3], dir="none")
         
         if self.incrementTicks:
-            filename = self.outputFileName + '_' + str(self.tickCounter)
+            filename = self.outputDirectory + str(self.tickCounter) + '_'+ id
         else:
-            filename = self.outputFileName
+            filename = self.outputDirectory + "state"
+        
+        dgraph.render(filename) """
+
+
+    def drawGraph(self, id):
+
+        dgraph = graphviz.Digraph(format=self.outputFormat)
+        dgraph.attr(label=f"{id} {self.tickCounter}", labelloc="t")
+
+        for node in self.processNodes: # Format: [process name, color, style, label]
+            dgraph.node(node[0], color=node[1], style=node[2], label=node[3])
+
+        for edge in self.edges: # Format: [vconn1 name, vconn2 name, transfer data]
+            p1 = self.syncObjectProcessLookup[edge[0]].name
+            p2 = self.syncObjectProcessLookup[edge[1]].name
+            dgraph.edge(p1, p2, str(edge[2])) 
+
+        for node in self.lockNodes: # Format: [lock name]
+            dgraph.node(node, shape="square")
+
+        for edge in self.lockEdges: # Format: [lock name, process name, color, style]
+            dgraph.edge(edge[0], edge[1], color=edge[2], style=edge[3], dir="none")
+        
+        if self.incrementTicks:
+            filename = self.outputDirectory + str(self.tickCounter) + '_'+ id
+        else:
+            filename = self.outputDirectory + "State"
         
         dgraph.render(filename)
 
@@ -637,6 +728,7 @@ class VConnection():
         good_to_go = self.recv_from_manager.recv()
         if good_to_go:
             self.connection.send(data)
+            print(multiprocessing.current_process().name, "sent", data)
     
     def recv(self):
         self.send_to_manager.send(("recv", [self.name, self.otherEndsName, " "]))
