@@ -1,632 +1,569 @@
 import multiprocessing
-import select
-import graphviz
 import random
-import time
+import graphviz
 
-# VConnections no longer have separate connections but have the connections of their VProcess which are assigned upon initialization of the manager 
-# No need for select objects
-# No need to instantiate multiple VLocks. The same object can be share across multiple processes
-# Nested release and acquire calls on different locks are resolved in the same tick
-# Same for nested select calls if something is being sent on one of the channels that are being listened on
+# VConnections no longer have separate connections but have the connections of their VProcess
+# which are assigned upon initialization of the manager.
+# No need for select objects.
+# No need to instantiate multiple VLocks. The same object can be share across multiple processes.
+# Nested release and acquire calls on different locks are resolved in the same tick.
+# Same for nested select calls if something is being sent on a channel being listened on.
 
 class VManager():
-    def __init__(self, vprocesses, vconnections, vlocks=[], logging=False, output='output/', outputFormat='pdf', interactiveLocks=False, logFileName="log.txt", draw=True, tickTock=True, incrTicks=True) -> None:
+    def __init__(self, vprocesses, vconnections, vlocks=[], logging=False, output='output/', output_format='pdf', interactive_locks=False, log_file_name="log.txt", draw=True, tick_tock=True, incr_ticks=True) -> None:
         self.processes = vprocesses # List of VProcess passed as to the class constructor as argument
         self.connections = vconnections # List of VConnection classes passed to the class constructor as argument
-        if type(vlocks) == VLock:
-            vlocks = [vlocks] 
+        if isinstance(vlocks, VLock):
+            vlocks = [vlocks]
         self.locks = vlocks # List of VLock objects
-        self.fromToConnectionDict = {} # Dictionary of normal connections, where they key is the connection intended for the manager to receive messages from sync-objects and the value is connection used to send to sync-objects. Populated in __init__
-        self.syncObjectProcessLookup = {} # Dictionary mapping VConnections to process names
-        self.processToManagerSendConn = {} # Dictionary mapping process name to that process' send connection to the manager 
-        self.processToManagerRecvConn = {} # Dictionary mapping process name to that process' receive connection from the manager
-        self.processToWorkerSendConn = {} # Dictionary mapping process name to that process' send connection to the worker
-        self.processToWorkerRecvConn = {} # Dictionary mapping process name to that process' receive connection from the worker
-        self.tickCounter = 0 # Counter used for the number on the image file and showing which tick is run
+        self.from_to_connection_dict = {} # Dictionary of normal connections, where they key is the connection intended for the manager to receive messages from sync-objects and the value is connection used to send to sync-objects. Populated in __init__
+        self.sync_object_process_lookup = {} # Dictionary mapping VConnections to process names
+        self.process_to_manager_send_conn = {} # Dictionary mapping process name to that process' send connection to the manager
+        self.process_to_manager_recv_conn = {} # Dictionary mapping process name to that process' receive connection from the manager
+        self.process_to_worker_send_conn = {} # Dictionary mapping process name to that process' send connection to the worker
+        self.process_to_worker_recv_conn = {} # Dictionary mapping process name to that process' receive connection from the worker
+        self.tick_counter = 0 # Counter used for the number on the image file and showing which tick is run
         self.edges = [] # List of edges between processes for the graph used for drawing the image
-        self.processNodes = [] # List of process nodes for the graph used for drawing the image
-        self.terminatedNodes = []
-        self.lockNodes = [] # List of lock nodes for the graph used for drawing the image - Could possibly be merged with processNodes
-        self.lockEdges = [] # List of edges between processes and locks for the graph used for drawing the image
-        self.lockedLocks = [] # List of locks that are currently locked 
-        self.waitingToSend = [] # List of processes waiting to send 
-        self.waitingToReceive = [] # List of processes waiting to receive
-        self.waitingToAcquire = [] # List of processes waiting to acquire a lock
-        self.waitingToRelease = [] # List of processes waiting to release a lock
-        self.waitingToSelect = [] # List of processes waiting to select
-        self.prematureSelectSends = [] # List of sending processes that have been allowed to send because of an intervening select statment. However the processes are still not considered able, until the receiving sides have received on the channels.
-        self.previousTickProcessCount = 0
+        self.process_nodes = [] # List of process nodes for the graph used for drawing the image
+        self.terminated_nodes = []
+        self.lock_nodes = [] # List of lock nodes for the graph used for drawing the image - Could possibly be merged with processNodes
+        self.lock_edges = [] # List of edges between processes and locks for the graph used for drawing the image
+        self.locked_locks = [] # List of locks that are currently locked
+        self.waiting_to_send = [] # List of processes waiting to send
+        self.waiting_to_receive = [] # List of processes waiting to receive
+        self.waiting_to_acquire = [] # List of processes waiting to acquire a lock
+        self.waiting_to_release = [] # List of processes waiting to release a lock
+        self.waiting_to_select = [] # List of processes waiting to select
+        self.premature_select_sends = [] # List of sending processes that have been allowed to send because of an intervening select statment. However the processes are still not considered able, until the receiving sides have received on the channels.
+        self.previous_tick_process_count = 0
         self.logging = logging
-        self.outputDirectory = output
-        self.outputFormat = outputFormat
-        self.interactive = interactiveLocks
+        self.output_directory = output
+        self.output_format = output_format
+        self.interactive = interactive_locks
         self.draw = draw
-        self.tickTock = tickTock
-        self.incrementTicks = incrTicks
-        
+        self.tick_tock = tick_tock
+        self.increment_ticks = incr_ticks
+
         if logging:
-            self.log = open(logFileName, "w")
-        
+            self.log = open(log_file_name, "w")
+
         locknamenum = 1
         for lock in self.locks:
-            if type(lock.name) == int:
+            if isinstance(lock.name, int):
                 lock.name = "lock" + str(locknamenum)
                 locknamenum += 1
-                self.lockNodes.append(lock.name)
+                self.lock_nodes.append(lock.name)
 
         # Setting up connections
         for process in self.processes:
-            self.processNodes.append([process.name, "green", "solid", process.name])
+            self.process_nodes.append([process.name, "green", "solid", process.name])
             recv, send = process.setup_manager_connection()
-            self.fromToConnectionDict[recv] = send
-            self.processToManagerSendConn[process.name] = process.send_to_manager
-            self.processToManagerRecvConn[process.name] = process.recv_from_manager
-            self.processToWorkerRecvConn[process.name] = process.recv_from_worker
+            self.from_to_connection_dict[recv] = send
+            self.process_to_manager_send_conn[process.name] = process.send_to_manager
+            self.process_to_manager_recv_conn[process.name] = process.recv_from_manager
+            self.process_to_worker_recv_conn[process.name] = process.recv_from_worker
             for connection in process.connections:
                 connection.send_to_manager = process.send_to_manager
                 connection.recv_from_manager = process.recv_from_manager
-                self.syncObjectProcessLookup[connection.name] = process
+                self.sync_object_process_lookup[connection.name] = process
 
-        VSelect.setDictionaries(self.processToManagerSendConn, self.processToManagerRecvConn)
+        VSelect.set_dictionaries(self.process_to_manager_send_conn, self.process_to_manager_recv_conn)
         for lock in self.locks:
-            lock.setDictionaries(self.processToManagerSendConn, self.processToManagerRecvConn)
+            lock.set_dictionaries(self.process_to_manager_send_conn, self.process_to_manager_recv_conn)
 
     def start(self):
         self.init_graph()
-        for p in self.processes:
-            p.start()
-    
-    def stepwiseTicks(self, processes):
+        for process in self.processes:
+            process.start()
+
+    def stepwise_ticks(self, processes):
         running = True
         while running:
-            response = input("Press enter to run next tick, type 'd' to draw graph or 'q' to end execution:")
-            if response == "q" or response == "quit":
+            response = input("Press enter to run next tick or type 'q' to end execution:")
+            if response in ('q', 'quit'):
                 running = False
                 if self.logging:
                     self.log.close()
-            elif response == "d":
-                self.drawGraph()
             else:
-                processes = self.runAllToTick(processes)
+                processes = self.run_all_to_tick(processes)
                 if not self.processes:
                     running = False
 
-    def runTicksToEnd(self, processes):
+    def run_ticks_to_end(self, processes):
         while self.processes:
-            processes = self.runAllToTick(processes)
-            if processes == False:
+            processes = self.run_all_to_tick(processes)
+            if processes is False:
                 break
 
-    def runAllToTick(self, processes):
-        self.tickCounter += 1
-        print(f"Tick {self.tickCounter} started")
-        
+    def run_all_to_tick(self, processes):
+        self.tick_counter += 1
+        print(f"Tick {self.tick_counter} started")
+
         if len(processes) == 0:
             print("Exiting - System is not progressing! - Either because of a deadlock, a process is blocking or a bug.")
             return False
-        
-        #self.previousTickProcessCount = len(processes)
 
-        releases, acquires, selects = self.getRequests(processes)
+        releases, acquires, selects = self.get_requests(processes)
 
-        acquires.extend(self.waitingToAcquire)
-        selects.extend(self.waitingToSelect)
+        acquires.extend(self.waiting_to_acquire)
+        selects.extend(self.waiting_to_select)
 
-        acquires, selects = self.handleNonChannels(releases, acquires, selects)
+        acquires, selects = self.handle_non_channels(releases, acquires, selects)
 
-        self.waitingToAcquire = acquires
-        self.waitingToSelect = selects
+        self.waiting_to_acquire = acquires
+        self.waiting_to_select = selects
 
-        #print("waitingToSend: ", self.waitingToSend)
-        #print("prematureSelectSends: ", self.prematureSelectSends)
-        self.updateGraph2()
+        self.update_graph()
         if self.draw:
-            self.drawGraph("Tick")
+            self.draw_graph("Tick")
 
-        updateNodesList = []
+        update_nodes_list = []
 
-        updateEdgesList, updateNodesList = self.handleSend(updateNodesList)
+        update_edges_list, update_nodes_list = self.handle_send(update_nodes_list)
 
-        updateNodesList, updateEdgesList = self.handleReceive(updateEdgesList, updateNodesList)
+        update_nodes_list, update_edges_list = self.handle_receive(update_edges_list, update_nodes_list)
 
-        #self.updateGraph(updateNodesList, updateEdgesList)
-        self.updateGraph2()
+        self.update_graph()
 
-        if self.tickTock:
+        if self.tick_tock:
             if self.draw:
-                self.drawGraph("Tock")
+                self.draw_graph("Tock")
 
-        ableProcesses = self.getAbleProcesses()
-    
-        #self.printState()
+        #self.print_state()
+        able_processes = self.get_able_processes()
+
         #print("ableProcesses: ", ableProcesses)
-        
-        return ableProcesses
-    
-    def getRequests(self, ableProcesses):
-        requestsSentFromAbleProcesses = [0 for _ in ableProcesses]
+
+        return able_processes
+
+    def get_requests(self, able_processes):
+        requests_sent_from_able_processes = [0 for _ in able_processes]
         loglist = []
         releases = []
         acquires = []
         selects = []
-        for index, process in enumerate(ableProcesses):
-            conn = self.processToWorkerRecvConn[process.name]
+        for index, process in enumerate(able_processes):
+            conn = self.process_to_worker_recv_conn[process.name]
             request = conn.recv()
-            requestsSentFromAbleProcesses[index] += 1
-            action, rest = request 
+            requests_sent_from_able_processes[index] += 1
+            action, rest = request
             if action == "acquire":
-                lockName = rest
-                acquires.append([lockName, process.name, self.fromToConnectionDict[conn]]) 
-                loglist.append(f"{process.name} requests to acquire {lockName}")
+                lock_name = rest
+                acquires.append([lock_name, process.name, self.from_to_connection_dict[conn]])
+                loglist.append(f"{process.name} requests to acquire {lock_name}")
             elif action == "release":
-                lockName = rest
-                releases.append([lockName, process.name, self.fromToConnectionDict[conn]]) 
-                loglist.append(f"{process.name} requests to release {lockName}")
+                lock_name = rest
+                releases.append([lock_name, process.name, self.from_to_connection_dict[conn]])
+                loglist.append(f"{process.name} requests to release {lock_name}")
             elif action == "select":
                 selectlist = rest
-                selects.append([process.name, self.fromToConnectionDict[conn], selectlist])
+                selects.append([process.name, self.from_to_connection_dict[conn], selectlist])
                 loglist.append(f"{process.name} requests to selecting")
-            elif action == "terminate": 
-                self.fromToConnectionDict[conn].send(True)
+            elif action == "terminate":
+                self.from_to_connection_dict[conn].send(True)
                 self.processes.remove(process)
-                self.updateNode(process.name, "black", "bold", process.name + "☠️")
-                self.terminatedNodes.append(process.name)
+                self.update_node(process.name, "black", "bold", process.name + "☠️")
+                self.terminated_nodes.append(process.name)
                 process.join()
                 loglist.append(f"{process.name} requests to terminate")
             else:
-                vconnName, otherEndsVConnName, transfer = rest
+                vconn_name, other_ends_vconn_name, transfer = rest
                 if action == "recv":
-                    self.waitingToReceive.append((otherEndsVConnName, vconnName, " ", self.fromToConnectionDict[conn]))
-                    loglist.append(f"{process.name} requests to receive from {self.syncObjectProcessLookup[otherEndsVConnName].name}")
+                    self.waiting_to_receive.append((other_ends_vconn_name, vconn_name, " ", self.from_to_connection_dict[conn]))
+                    loglist.append(f"{process.name} requests to receive from {self.sync_object_process_lookup[other_ends_vconn_name].name}")
                 elif action == "send":
-                    self.waitingToSend.append((vconnName, otherEndsVConnName, transfer, self.fromToConnectionDict[conn]))
-                    loglist.append(f"{process.name} requests to send to {self.syncObjectProcessLookup[otherEndsVConnName].name}")
-        
+                    self.waiting_to_send.append((vconn_name, other_ends_vconn_name, transfer, self.from_to_connection_dict[conn]))
+                    loglist.append(f"{process.name} requests to send to {self.sync_object_process_lookup[other_ends_vconn_name].name}")
+
         if self.logging:
-            self.log.write(f"Tick {self.tickCounter}" + '\n')
+            self.log.write(f"Tick {self.tick_counter}" + '\n')
             for entry in loglist:
                 self.log.write(entry + '\n')
                 self.log.flush()
 
-        for request in requestsSentFromAbleProcesses:
+        for request in requests_sent_from_able_processes:
             if request != 1:
-                print(f"ERROR: A PROCESS HAS EITHER SENT MORE THAN ONE MESSAGES OR NOT SENT A MESSAGE - {requestsSentFromAbleProcesses}")
+                print(f"ERROR: A PROCESS HAS EITHER SENT MORE THAN ONE MESSAGES OR NOT SENT A MESSAGE - {requests_sent_from_able_processes}")
 
         return releases, acquires, selects
-    
-    def handleSend(self, updateNodesList):
-        updateEdgesList = []
 
-        for request in self.waitingToSend:
+    def handle_send(self, update_nodes_list):
+        update_edges_list = []
+
+        for request in self.waiting_to_send:
             for edge in self.edges:
                 if edge[0] == request[0] and edge[1] == request[1]:
-                    #if not self.tickTock:
-                    #    condition = edge[2] == ' '
-                    #else:
-                    #    condition = True
-                    condition = True
-                    if condition:
-                        updateEdgesList.append([request[0], request[1], request[2]])
-                        process = self.syncObjectProcessLookup[request[0]].name
-                        updateNodesList.append([process, 'red', 'solid', process])
-        
-        return updateEdgesList, updateNodesList
+                    update_edges_list.append([request[0], request[1], request[2]])
+                    process = self.sync_object_process_lookup[request[0]].name
+                    update_nodes_list.append([process, 'red', 'solid', process])
 
-    def handleSelect(self, releaseList, acquireList, selectList):
+        return update_edges_list, update_nodes_list
 
-        newrl = []
-        newal = []
-        newsl = []
+
+
+    def handle_select(self, release_list, acquire_list, select_list):
+        """
+        For each select request, check if there is any data on any of the connections being polled.
+        Return a list of VConnections with data on the channels.
+        """
+        new_release_list = []
+        new_acquire_list = []
+        new_select_list = []
 
         selected = False
 
-        tmpSelectList = selectList[:]
-        tmpSendList = self.waitingToSend[:]
-        tmpPrematureSendList = self.prematureSelectSends[:] 
-        for pslct in tmpSelectList:  # self.waitingToSelect 
+        temp_select_list = select_list[:]
+        temp_send_list = self.waiting_to_send[:]
+
+        # premature_select_sends has been removed for now as they introduced a race condition,
+        # however I leave it commented out as I think it might be useful with another tick defintion in the future.
+        #temp_premature_send_list = self.premature_select_sends[:]
+        for pslct in temp_select_list:  # self.waiting_to_select
+            active_channels = []
             remove = False
-            selectlist = pslct[2] 
+            selectlist = pslct[2]
             for conn in selectlist:
-                #edge = self.getRecvEdge(conn.name)
-                #if not self.tickTock:
-                #    condition = edge[2] != ' '
-                #else:
-                #    condition = True
-                condition = True
-                if condition:
-                    for wts in tmpSendList: #self.waitingToSend
-                        if conn.name == wts[1]:
-                            wts[3].send(True)
-                            process = self.syncObjectProcessLookup[wts[0]].name
-                            remove = True
-                            self.prematureSelectSends.append(wts) # These being appended before receive should not matter for handleReceive, as there should not be requests waiting to receive on the channel, as the selecting process will be the one receiving eventually.
-                            self.waitingToSend.remove(wts) 
-                    for pss in tmpPrematureSendList:
-                        if conn.name == pss[1]:
-                            remove = True
+                for wts in temp_send_list: #self.waiting_to_send
+                    if conn.name == wts[1]:
+                        #wts[3].send(True)
+                        #process = self.sync_object_process_lookup[wts[0]].name
+                        remove = True
+                        active_channels.append(conn.name)
+                        #self.premature_select_sends.append(wts) # These being appended before receive should not matter for handleReceive, as there should not be requests waiting to receive on the channel, as the selecting process will be the one receiving eventually.
+                        #self.waiting_to_send.remove(wts)
+                #for pss in temp_premature_send_list:
+                #    if conn.name == pss[1]:
+                #        remove = True
+                #        active_channels.append(conn.name)
 
-            if remove == True:
+            if remove is True:
                 selected = True
-                time.sleep(0.1)
-                pslct[1].send(True)
-                process = self.syncObjectProcessLookup[wts[0]].name
-                process = self.getProcess(pslct[0])
-                rl, al, sl =self.getRequests([process])
-                newrl.extend(rl)
-                newal.extend(al)
-                newsl.extend(sl)
-                selectList.remove(pslct)
+                pslct[1].send(active_channels)
+                process = self.get_process(pslct[0])
+                releases, acquires, selects = self.get_requests([process])
+                new_release_list.extend(releases)
+                new_acquire_list.extend(acquires)
+                new_select_list.extend(selects)
+                select_list.remove(pslct)
 
-        releaseList.extend(newrl)
-        acquireList.extend(newal)
-        selectList.extend(newsl)
-        
-        return releaseList, acquireList, selectList, selected
-    
-    def handleReceive(self, updateEdgesList, updateNodesList):
-        
-        removeRecv = []
-        for request in self.waitingToReceive:
+        release_list.extend(new_release_list)
+        acquire_list.extend(new_acquire_list)
+        select_list.extend(new_select_list)
+
+        return release_list, acquire_list, select_list, selected
+
+    def handle_receive(self, update_edges_list, update_nodes_list):
+
+        remove_recv = []
+        for request in self.waiting_to_receive:
             for currentedge in self.edges:
                 if currentedge[0] == request[0] and currentedge[1] == request[1]:
-                    #if not self.tickTock:
-                    #    condition = currentedge[2] != ' '
-                    #else:
-                    #    condition = True
-                    condition = True
-                    if condition:
-                        p1name = None
-                        match = False
-                        updateEdgesList.append([request[0], request[1], request[2]])
-                        removelist = []
-                        for wts in self.waitingToSend: 
-                            p1name, _, _, conn = wts
-                            if p1name == request[0]:
-                                match = True
-                                conn.send(True)
-                                removelist.append(wts)
-                        self.waitingToSend[:] = [wts for wts in self.waitingToSend if wts not in removelist]
-                        removelist = []
-                        for pss in self.prematureSelectSends:
-                            if pss[0] == request[0]:
-                                match = True
-                                removelist.append(pss)
-                        self.prematureSelectSends = [pss for pss in self.prematureSelectSends if pss not in removelist]
-                        if match:
-                            removeRecv.append(request)
-                            process = self.syncObjectProcessLookup[request[0]].name
-                            updateNodesList.append([process, 'green', 'solid', process])
-                            process = self.syncObjectProcessLookup[request[1]].name
-                            updateNodesList.append([process, 'green', 'solid', process])
-                            request[3].send(True)
+                    p1name = None
+                    match = False
+                    update_edges_list.append([request[0], request[1], request[2]])
+                    remove_list = []
+                    for wts in self.waiting_to_send:
+                        p1name, _, _, conn = wts
+                        if p1name == request[0]:
+                            match = True
+                            conn.send(True)
+                            remove_list.append(wts)
+                    self.waiting_to_send[:] = [wts for wts in self.waiting_to_send if wts not in remove_list]
+                    remove_list = []
+                    for pss in self.premature_select_sends:
+                        if pss[0] == request[0]:
+                            match = True
+                            remove_list.append(pss)
+                    self.premature_select_sends = [pss for pss in self.premature_select_sends if pss not in remove_list]
+                    if match:
+                        remove_recv.append(request)
+                        process = self.sync_object_process_lookup[request[0]].name
+                        process = self.sync_object_process_lookup[request[1]].name
+                        request[3].send(True)
 
-        self.waitingToReceive[:] = [conn for conn in self.waitingToReceive if conn not in removeRecv]
+        self.waiting_to_receive[:] = [conn for conn in self.waiting_to_receive if conn not in remove_recv]
 
-        for request in self.waitingToReceive:
-            for node in self.processNodes:
-                process = self.syncObjectProcessLookup[request[1]].name
+        for request in self.waiting_to_receive:
+            for node in self.process_nodes:
+                process = self.sync_object_process_lookup[request[1]].name
                 if process == node[0]:
-                    updateNodesList.append([process, 'red', node[2], process])
+                    update_nodes_list.append([process, 'red', node[2], process])
 
-        return updateNodesList, updateEdgesList
-    
-    def getProcess(self, name):
+        return update_nodes_list, update_edges_list
+
+    def get_process(self, name):
         for process in self.processes:
             if process.name == name:
                 return process
+        return []
 
-    def acquireLocks(self, releaseList, acquireList, selectList):
-        processesWaitingToAcquire = acquireList[:]
-        newrl = []
-        newal = []
-        newsl = []
+    def acquire_locks(self, release_list, acquire_list, select_list):
+        processes_waiting_to_acquire = acquire_list[:]
+        new_release_list = []
+        new_acquire_list = []
+        new_select_list = []
 
         acquired = False
 
-        templocks = self.lockNodes[:]
-        for lock in templocks:
-            if not self.checkLocked(lock):
-                templist = []
-                for pwta in processesWaitingToAcquire:
+        temp_locks = self.lock_nodes[:]
+        for lock in temp_locks:
+            if not self.check_locked(lock):
+                temp_list = []
+                for pwta in processes_waiting_to_acquire:
                     if lock == pwta[0]:
-                        templist.append(pwta)
-                if len(templist) > 0:
-                    if self.interactive and len(templist) > 1:
-                        for i, process in enumerate(templist):
+                        temp_list.append(pwta)
+                if len(temp_list) > 0:
+                    if self.interactive and len(temp_list) > 1:
+                        for i, process in enumerate(temp_list):
                             print(f"Enter {i} to let {process[1]} acquire {lock}")
                         while True:
                             response = input("Make your choice: ")
                             try:
-                                 int(response)
+                                int(response)
                             except ValueError:
                                 print(f"{response} is not an integer")
                             else:
                                 choice = int(response)
-                                if choice < 0 or choice >= len(templist): 
+                                if choice < 0 or choice >= len(temp_list):
                                     print(f"{choice} is not a valid valid choice")
                                 else:
-                                    templist[choice][2].send(True)                                    
-                                    process = self.getProcess(templist[randIndex][1])
-                                    rl, al, sl = self.getRequests([process])
-                                    newrl.extend(rl)
-                                    newal.extend(al)
-                                    newsl.extend(sl)
-                                    self.lockedLocks.append([templist[choice][0], templist[choice][1]])
-                                    acquireList.remove(templist[choice])
+                                    temp_list[choice][2].send(True)
+                                    process = self.get_process(temp_list[choice][1])
+                                    releases, acquires, selects = self.get_requests([process])
+                                    new_release_list.extend(releases)
+                                    new_acquire_list.extend(acquires)
+                                    new_select_list.extend(selects)
+                                    self.locked_locks.append([temp_list[choice][0], temp_list[choice][1]])
+                                    acquire_list.remove(temp_list[choice])
                                     break
                     else:
                         acquired = True
-                        randIndex = random.randint(0, len(templist) - 1)
-                        templist[randIndex][2].send(True)
-                        #print(f"{templist[randIndex][1]} acquired the lock")
-                        process = self.getProcess(templist[randIndex][1])
-                        #print(f"process: {process}")
-                        rl, al, sl = self.getRequests([process])
-                        #print("rl", rl, "al:", al, "sl:", sl)
-                        newrl.extend(rl)
-                        newal.extend(al)
-                        newsl.extend(sl)
-                        self.lockedLocks.append([templist[randIndex][0], templist[randIndex][1]])
-                        acquireList.remove(templist[randIndex])
+                        rand_index = random.randint(0, len(temp_list) - 1)
+                        temp_list[rand_index][2].send(True)
+                        process = self.get_process(temp_list[rand_index][1])
+                        releases, acquires, selects = self.get_requests([process])
+                        new_release_list.extend(releases)
+                        new_acquire_list.extend(acquires)
+                        new_select_list.extend(selects)
+                        self.locked_locks.append([temp_list[rand_index][0], temp_list[rand_index][1]])
+                        acquire_list.remove(temp_list[rand_index])
 
-        releaseList.extend(newrl)
-        acquireList.extend(newal)
-        selectList.extend(newsl)
+        release_list.extend(new_release_list)
+        acquire_list.extend(new_acquire_list)
+        select_list.extend(new_select_list)
 
-        return releaseList, acquireList, selectList, acquired
-    
-    def handleNonChannels(self, releaseList, acquireList, selectList):
+        return release_list, acquire_list, select_list, acquired
+
+    def handle_non_channels(self, release_list, acquire_list, select_list):
+
+        # First all locks are released, potentiallly resulting in new non-channel requests.
+        new_release_list, new_acquire_list, new_select_list = self.release_locks(release_list, [], select_list)
+        # Second locks are being acquired but only by processes which requests did not follow from the just released locks.
+        # This ensures that a process releasing a lock can not acquire it again, if another process is already waiting for that lock.
+        release_list, acquire_list, select_list, acquired = self.acquire_locks(new_release_list, acquire_list, new_select_list)
+
+        acquire_list.extend(new_acquire_list)
 
         acquired = True
-        while (releaseList or acquireList or selectList) and acquired:
+        while (release_list or acquire_list or select_list) and acquired:
             acquired = False
             selected = True
-            while (releaseList or selectList) and selected:
+            while (release_list or select_list) and selected:
                 selected = False
-                
-                while releaseList:
-                    releaseList, acquireList, selectList = self.releaseLocks(releaseList, acquireList, selectList)
-    
-                if selectList:
-                    releaseList, acquireList, selectList, selected = self.handleSelect(releaseList, acquireList, selectList)
 
-            if acquireList:
-                releaseList, acquireList, selectList, acquired = self.acquireLocks(releaseList, acquireList, selectList)
-            else: 
+                while release_list:
+                    release_list, acquire_list, select_list = self.release_locks(release_list, acquire_list, select_list)
+
+                if select_list:
+                    release_list, acquire_list, select_list, selected = self.handle_select(release_list, acquire_list, select_list)
+
+            if acquire_list:
+                release_list, acquire_list, select_list, acquired = self.acquire_locks(release_list, acquire_list, select_list)
+            else:
                 break
 
-        return acquireList, selectList
+        return acquire_list, select_list
 
-    def releaseLocks(self, releaseList, acquireList, selectList):
-        newrl = []
-        newal = []
-        newsl = []
-        removelist = []
+    def release_locks(self, release_list, acquire_list, select_list):
+        new_release_list = []
+        new_acquire_list = []
+        new_select_list = []
+        remove_list = []
 
-        tempReleaseList = releaseList[:]
-        for wtr in tempReleaseList:
+        temp_release_list = release_list[:]
+        for wtr in temp_release_list:
             wtr[2].send(True)
-            process = self.getProcess(wtr[1])
-            rl, al, sl = self.getRequests([process])
-            newrl.extend(rl)
-            newal.extend(al)
-            newsl.extend(sl)
-            self.lockedLocks.remove([wtr[0], wtr[1]])
-            removelist.append(wtr)
+            process = self.get_process(wtr[1])
+            releases, acquires, selects = self.get_requests([process])
+            new_release_list.extend(releases)
+            new_acquire_list.extend(acquires)
+            new_select_list.extend(selects)
+            self.locked_locks.remove([wtr[0], wtr[1]])
+            remove_list.append(wtr)
 
-        for r in removelist:
-            releaseList.remove(r)
+        for request in remove_list:
+            release_list.remove(request)
 
-        releaseList.extend(newrl)
-        acquireList.extend(newal)
-        selectList.extend(newsl)
+        release_list.extend(new_release_list)
+        acquire_list.extend(new_acquire_list)
+        select_list.extend(new_select_list)
 
-        return releaseList, acquireList, selectList
+        return release_list, acquire_list, select_list
 
-    def getAbleProcesses(self):
-        
-        ableProcesses = self.processes[:]
-        
+    def get_able_processes(self):
+
+        able_processes = self.processes[:]
+
         for process in self.processes:
-            for p in self.waitingToSend: 
-                if process.name == self.syncObjectProcessLookup[p[0]].name:
-                    ableProcesses.remove(process)
-            for p in self.prematureSelectSends: 
-                if process.name == self.syncObjectProcessLookup[p[0]].name:
-                    ableProcesses.remove(process)
-            for p in self.waitingToReceive:
-                if process.name == self.syncObjectProcessLookup[p[1]].name:
-                    ableProcesses.remove(process)
-            for p in self.waitingToAcquire: 
-                if process.name == p[1]:
-                    ableProcesses.remove(process)
-            for p in self.waitingToSelect:
-                if process.name == p[0]:
-                    ableProcesses.remove(process)
+            for request in self.waiting_to_send:
+                if process.name == self.sync_object_process_lookup[request[0]].name:
+                    able_processes.remove(process)
+            for request in self.premature_select_sends:
+                if process.name == self.sync_object_process_lookup[request[0]].name:
+                    able_processes.remove(process)
+            for request in self.waiting_to_receive:
+                if process.name == self.sync_object_process_lookup[request[1]].name:
+                    able_processes.remove(process)
+            for request in self.waiting_to_acquire:
+                if process.name == request[1]:
+                    able_processes.remove(process)
+            for request in self.waiting_to_select:
+                if process.name == request[0]:
+                    able_processes.remove(process)
 
-        return ableProcesses
+        return able_processes
 
     def init_graph(self):
-        
-        for process in self.processes:
-            for conn in process.connections:
-                if type(conn) == VConnection:
-                    for p2 in self.processes:
-                        for conn2 in p2.connections:
-                            if type(conn2) == VConnection:
-                                if conn.otherEndsName == conn2.name and conn.sender == True:
+
+        for process1 in self.processes:
+            for conn in process1.connections:
+                if isinstance(conn, VConnection):
+                    for process2 in self.processes:
+                        for conn2 in process2.connections:
+                            if isinstance(conn2, VConnection):
+                                if conn.other_ends_name == conn2.name and conn.sender is True:
                                     self.edges.append([conn.name, conn2.name, " "])
 
-            for lock in process.locks:
-                if type(lock) == VLock:
-                    self.lockEdges.append([lock.name, process.name, "black", "dashed"])     
+            for lock in process1.locks:
+                if isinstance(lock, VLock):
+                    self.lock_edges.append([lock.name, process1.name, "black", "dashed"])
 
         if self.draw:
-            self.drawGraph("Tock")
+            self.draw_graph("Tock")
 
-    def updateGraph(self, updateNodesList, updateEdgesList):
-        
-        for node in updateNodesList:
-            self.updateNode(node[0], node[1], node[2], node[3])
-        
-        for edge in updateEdgesList:
-            self.updateEdge(edge[0], edge[1], edge[2])
-        
-        for node in self.waitingToSelect:
-            self.updateNode(node[0], 'red', 'dashed', node[0])
+    def update_graph(self):
 
-        for request in self.waitingToAcquire:
-            self.updateNode(request[1], 'red', 'solid', request[1])
-        
-        for edge in self.lockEdges:
-            self.updateLockEdge(edge[0], edge[1], 'black', 'dashed')
-
-        for req in self.waitingToAcquire:
-            self.updateLockEdge(req[0], req[1], 'purple', 'dashed')
-
-        for lock in self.lockedLocks:
-            self.updateLockEdge(lock[0], lock[1], 'blue', 'solid')
-
-    def updateGraph2(self):
-        
-        for node in self.processNodes:
+        for node in self.process_nodes:
             color = "green"
-            for req in self.waitingToSend:
-                if node[0] == self.syncObjectProcessLookup[req[0]].name:
+            for request in self.waiting_to_send:
+                if node[0] == self.sync_object_process_lookup[request[0]].name:
                     color = "red"
-            for req in self.prematureSelectSends:
-                if node[0] == self.syncObjectProcessLookup[req[0]].name:
+            for request in self.premature_select_sends:
+                if node[0] == self.sync_object_process_lookup[request[0]].name:
                     color = "red"
-            for term in self.terminatedNodes:
-                if node[0] == term:
-                     color = "black"
-            for req in self.waitingToReceive:
-                if node[0] == self.syncObjectProcessLookup[req[1]].name:
+            for terminated_node in self.terminated_nodes:
+                if node[0] == terminated_node:
+                    color = "black"
+            for request in self.waiting_to_receive:
+                if node[0] == self.sync_object_process_lookup[request[1]].name:
                     color = "red"
-            
+
             node[1] = color
             node[2] = 'solid'
-            #self.updateNode(node[0], color, 'solid', node[3])
 
         for edge in self.edges:
             new_edge = " "
-            for req in self.waitingToSend:
+            for req in self.waiting_to_send:
                 if edge[0] == req[0]:
                     new_edge = req[2]
-            for pms in self.prematureSelectSends:
+            for pms in self.premature_select_sends:
                 if edge[0] == pms[0]:
                     new_edge = pms[2]
             edge[2] = new_edge
 
-        for node in self.waitingToSelect:
-            self.updateNode(node[0], 'red', 'dashed', node[0])
+        for node in self.waiting_to_select:
+            self.update_node(node[0], 'red', 'dashed', node[0])
 
-        for edge in self.lockEdges:
-            self.updateLockEdge(edge[0], edge[1], 'black', 'dashed')
-        
-        for request in self.waitingToAcquire:
-            self.updateNode(request[1], 'purple', 'dashed', request[1])
-            self.updateLockEdge(request[0], request[1], 'purple', 'dashed')
-        
-        for lock in self.lockedLocks:
-            self.updateLockEdge(lock[0], lock[1], 'blue', 'solid')
-        
-    """ def drawGraph(self, id):
+        for edge in self.lock_edges:
+            self.update_lock_edge(edge[0], edge[1], 'black', 'dashed')
 
-        dgraph = graphviz.Digraph(format=self.outputFormat)
-        dgraph.attr(label=f"{id} {self.tickCounter}", labelloc="t")
+        for request in self.waiting_to_acquire:
+            self.update_node(request[1], 'purple', 'dashed', request[1])
+            self.update_lock_edge(request[0], request[1], 'purple', 'dashed')
 
-        for node in self.processNodes: # Format: [process name, color, style, label]
+        for lock in self.locked_locks:
+            self.update_lock_edge(lock[0], lock[1], 'blue', 'solid')
+
+    def draw_graph(self, name):
+
+        dgraph = graphviz.Digraph(format=self.output_format)
+        dgraph.attr(label=f"{name} {self.tick_counter}", labelloc="t")
+
+        for node in self.process_nodes: # Format: [process name, color, style, label]
             dgraph.node(node[0], color=node[1], style=node[2], label=node[3])
 
         for edge in self.edges: # Format: [vconn1 name, vconn2 name, transfer data]
-            p1 = self.syncObjectProcessLookup[edge[0]].name
-            p2 = self.syncObjectProcessLookup[edge[1]].name
-            dgraph.edge(p1, p2, edge[2]) 
+            process1 = self.sync_object_process_lookup[edge[0]].name
+            process2 = self.sync_object_process_lookup[edge[1]].name
+            dgraph.edge(process1, process2, str(edge[2]))
 
-        for node in self.lockNodes: # Format: [lock name]
+        for node in self.lock_nodes: # Format: [lock name]
             dgraph.node(node, shape="square")
 
-        for edge in self.lockEdges: # Format: [lock name, process name, color, style]
+        for edge in self.lock_edges: # Format: [lock name, process name, color, style]
             dgraph.edge(edge[0], edge[1], color=edge[2], style=edge[3], dir="none")
-        
-        if self.incrementTicks:
-            filename = self.outputDirectory + str(self.tickCounter) + '_'+ id
+
+        if self.increment_ticks:
+            file_name = self.output_directory + str(self.tick_counter) + '_'+ name
         else:
-            filename = self.outputDirectory + "state"
-        
-        dgraph.render(filename) """
+            file_name = self.output_directory + "State"
 
+        dgraph.render(file_name)
 
-    def drawGraph(self, id):
-
-        dgraph = graphviz.Digraph(format=self.outputFormat)
-        dgraph.attr(label=f"{id} {self.tickCounter}", labelloc="t")
-
-        for node in self.processNodes: # Format: [process name, color, style, label]
-            dgraph.node(node[0], color=node[1], style=node[2], label=node[3])
-
-        for edge in self.edges: # Format: [vconn1 name, vconn2 name, transfer data]
-            p1 = self.syncObjectProcessLookup[edge[0]].name
-            p2 = self.syncObjectProcessLookup[edge[1]].name
-            dgraph.edge(p1, p2, str(edge[2])) 
-
-        for node in self.lockNodes: # Format: [lock name]
-            dgraph.node(node, shape="square")
-
-        for edge in self.lockEdges: # Format: [lock name, process name, color, style]
-            dgraph.edge(edge[0], edge[1], color=edge[2], style=edge[3], dir="none")
-        
-        if self.incrementTicks:
-            filename = self.outputDirectory + str(self.tickCounter) + '_'+ id
-        else:
-            filename = self.outputDirectory + "State"
-        
-        dgraph.render(filename)
-
-    def updateEdge(self, name1, name2, input):
+    def update_edge(self, name1, name2, data):
         for edge in self.edges:
             if name1 == edge[0] and name2 == edge[1]:
-                edge[2] = str(input)
+                edge[2] = str(data)
 
-    def updateLockEdge(self, name1, name2, color, style):
-        for edge in self.lockEdges:
+    def update_lock_edge(self, name1, name2, color, style):
+        for edge in self.lock_edges:
             if name1 == edge[0] and name2 == edge[1]:
                 edge[2] = color
                 edge[3] = style
 
-    def updateNode(self, node, color, style, label):
-        for processNode in self.processNodes:
-            if node == processNode[0]:
-                processNode[1] = color
-                processNode[2] = style
-                processNode[3] = label 
+    def update_node(self, node, color, style, label):
+        for process_node in self.process_nodes:
+            if node == process_node[0]:
+                process_node[1] = color
+                process_node[2] = style
+                process_node[3] = label
 
-    def printState(self):
-        print(f"self.waitingToSend: {self.waitingToSend}")
-        print(f"self.waitingToReceive: {self.waitingToReceive}")
-        print(f"self.prematureSelectSends: {self.prematureSelectSends}")
-        print(f"self.waitingToSelect: {self.waitingToSelect}")
-        print(f"self.waitingToAcquire {self.waitingToAcquire}")
-        print(f"self.waitingToRelease {self.waitingToRelease}")
-        print(f"self.lockedLocks {self.lockedLocks}")
-    
-    def checkLocked(self, lock):
-        for pair in self.lockedLocks:
+    def print_state(self):
+        print(f"self.waitingToSend: {self.waiting_to_send}")
+        print(f"self.waitingToReceive: {self.waiting_to_receive}")
+        print(f"self.prematureSelectSends: {self.premature_select_sends}")
+        print(f"self.waitingToSelect: {self.waiting_to_select}")
+        print(f"self.waitingToAcquire {self.waiting_to_acquire}")
+        print(f"self.waitingToRelease {self.waiting_to_release}")
+        print(f"self.lockedLocks {self.locked_locks}")
+
+    def check_locked(self, lock):
+        for pair in self.locked_locks:
             if pair[0] == lock:
                 return True
-    
-    def getSendEdge(self, id):
-        for edge in self.edges:
-            if edge[0] == id:
-                return edge
+        return False
 
-    def getRecvEdge(self, id):
+    def get_send_edge(self, name):
         for edge in self.edges:
-            if edge[1] == id:
+            if edge[0] == name:
                 return edge
+        return []
 
+    def get_recv_edge(self, name):
+        for edge in self.edges:
+            if edge[1] == name:
+                return edge
+        return []
 
 class VProcess(multiprocessing.Process):
     num = 0
@@ -637,17 +574,21 @@ class VProcess(multiprocessing.Process):
         super().__init__(group, target, name, args, kwargs, daemon=daemon)
         self.connections = [] # All synchronization objects given as parameters to target
         self.locks = []
+        self.send_to_manager = None
+        self.recv_from_worker = None
+        self.send_to_worker = None
+        self.recv_from_manager = None
 
         for arg in args:
-            if type(arg) == VConnection:
+            if isinstance(arg, VConnection):
                 self.connections.append(arg)
-            if type(arg) == VLock:
+            if isinstance(arg, VLock):
                 self.locks.append(arg)
-            if type(arg) == list:
+            if isinstance(arg, list):
                 for elm in arg:
-                    if type(elm) == VConnection:
+                    if isinstance(arg, VConnection):
                         self.connections.append(elm)
-                    if type(elm) == VLock:
+                    if isinstance(arg, VLock):
                         self.locks.append(elm)
 
     def setup_manager_connection(self):
@@ -664,78 +605,80 @@ class VProcess(multiprocessing.Process):
 class VLock():
     def __init__(self, name=None):
         self.lock = multiprocessing.Lock()
-        if name: 
+        if name:
             self.name = name
         else:
             self.name = id(self)
-    
-    def setDictionaries(self, sendDict, recvDict):
-        self.processToManagerSendConn = sendDict
-        self.processToManagerRecvConn = recvDict
-        
+
+        self.process_to_manager_send_conn = None
+        self.process_to_manager_recv_conn = None
+
+    def set_dictionaries(self, send_dict, recv_dict):
+        self.process_to_manager_send_conn = send_dict
+        self.process_to_manager_recv_conn = recv_dict
+
     def acquire(self):
-        processName = multiprocessing.current_process().name
-        sendconn = self.processToManagerSendConn[processName]
-        recvconn = self.processToManagerRecvConn[processName]
-        sendconn.send(("acquire", self.name))
-        recvconn.recv()
+        process_name = multiprocessing.current_process().name
+        send_conn = self.process_to_manager_send_conn[process_name]
+        recv_conn = self.process_to_manager_recv_conn[process_name]
+        send_conn.send(("acquire", self.name))
+        recv_conn.recv()
         self.lock.acquire()
 
     def release(self):
-        processName = multiprocessing.current_process().name
-        sendconn = self.processToManagerSendConn[processName]
-        recvconn = self.processToManagerRecvConn[processName]
-        sendconn.send(("release", self.name))
-        recvconn.recv()
+        process_name = multiprocessing.current_process().name
+        send_conn = self.process_to_manager_send_conn[process_name]
+        recv_conn = self.process_to_manager_recv_conn[process_name]
+        send_conn.send(("release", self.name))
+        recv_conn.recv()
         self.lock.release()
 
 
 class VSelect():
 
     @classmethod
-    def setDictionaries(cls, sendDict, recvDict):
-        cls.processToManagerSendConn = sendDict
-        cls.processToManagerRecvConn = recvDict
+    def set_dictionaries(cls, send_dict, recv_dict):
+        cls.process_to_manager_send_conn = send_dict
+        cls.process_to_manager_recv_conn = recv_dict
 
     @classmethod
-    def select(cls, vselectlist1, selectlist2=[], selectlist3=[]):
-        processName = multiprocessing.current_process().name
-        sendconn = cls.processToManagerSendConn[processName]
-        recvconn = cls.processToManagerRecvConn[processName]
-        sendconn.send(("select", vselectlist1)) # For now just sending selectlist1
-        recvconn.recv()
-        selectlist1 = [vconn.connection for vconn in vselectlist1]
-        (inputs1, inputs2, inputs3) = select.select(selectlist1, selectlist2, selectlist3)
-        vinputs1 = []
-        for connection in inputs1:
-            for vconnection in vselectlist1:
-                if connection == vconnection.connection:
-                    vinputs1.append(vconnection)
-        return vinputs1, inputs2, inputs3
+    def select(cls, rlist, wlist=[], xlist=[]):
+        process_name = multiprocessing.current_process().name
+        send_conn = cls.process_to_manager_send_conn[process_name]
+        recv_conn = cls.process_to_manager_recv_conn[process_name]
+        send_conn.send(("select", rlist)) # For now just sending selectlist1
+        active_channels = recv_conn.recv() # active_channels is list of names of VConnections where something is being sent
+        inputs = []
+        for vconn_name in active_channels:
+            for vconnection in rlist:
+                if vconn_name == vconnection.name:
+                    inputs.append(vconnection)
+        return inputs, [], []
 
 
 class VConnection():
-    def __init__(self, connection, name, otherEndsName, sender=True) -> None:
+    def __init__(self, connection, name, other_ends_name, sender=True) -> None:
         self.name = name
-        self.otherEndsName = otherEndsName
+        self.other_ends_name = other_ends_name
         self.connection = connection
         self.send_to_manager = None
         self.recv_from_manager = None
         self.sender = sender
 
     def send(self, data):
-        self.send_to_manager.send(("send", [self.name, self.otherEndsName, data]))
+        self.send_to_manager.send(("send", [self.name, self.other_ends_name, data]))
         good_to_go = self.recv_from_manager.recv()
         if good_to_go:
             self.connection.send(data)
             print(multiprocessing.current_process().name, "sent", data)
-    
+
     def recv(self):
-        self.send_to_manager.send(("recv", [self.name, self.otherEndsName, " "]))
+        self.send_to_manager.send(("recv", [self.name, self.other_ends_name, " "]))
         good_to_go = self.recv_from_manager.recv()
         if good_to_go:
             data = self.connection.recv()
             return data
+        return None
 
 
 def VPipe(name=""):
