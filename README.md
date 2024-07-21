@@ -86,26 +86,29 @@ To install graphviz 0.20.3 use pip to install:
 
 ### Example 1:
 
-![alt text](https://github.com/kbobkpop/vprocesses/blob/master/examples/producerConsumer/Tick_0.png?raw=true)
+![alt text](https://github.com/kbobkpop/vprocesses/blob/master/examples/producerConsumer/Tock_0.png?raw=true)
 ![alt text](https://github.com/kbobkpop/vprocesses/blob/master/examples/producerConsumer/Tick_1.png?raw=true)
+![alt text](https://github.com/kbobkpop/vprocesses/blob/master/examples/producerConsumer/Tock_1.png?raw=true)
 ![alt text](https://github.com/kbobkpop/vprocesses/blob/master/examples/producerConsumer/Tick_2.png?raw=true)
 
-A producer process is producing integer and sending them to a consumer process. The outline of the nodes being red, indicate that both processes are blocking and the '0' next to the edge indicates that the integer 0 is is being sent by p1.
+A producer process is producing integers and sending them to a consumer process. The outline of the nodes being red, indicate that both processes are blocking and the '0' next to the edge indicates that the integer 0 is being sent by p1.
 
 ### Example 2:
 
-![alt text](https://github.com/kbobkpop/vprocesses/blob/master/examples/lockedPingPong/Tick_0.png?raw=true)
+![alt text](https://github.com/kbobkpop/vprocesses/blob/master/examples/lockedPingPong/Tock_0.png?raw=true)
 ![alt text](https://github.com/kbobkpop/vprocesses/blob/master/examples/lockedPingPong/Tick_1.png?raw=true)
+![alt text](https://github.com/kbobkpop/vprocesses/blob/master/examples/lockedPingPong/Tock_1.png?raw=true)
 ![alt text](https://github.com/kbobkpop/vprocesses/blob/master/examples/lockedPingPong/Tick_2.png?raw=true)
 
-A slightly more complex example of the four processes Albert, Bertha, Charlie and Dennis which parwise are sending the strings 'Hello' and 'Hi' back and forth. Though, before sending they are required to acquire the shared lock, lock1. A connection from a process to a lock is indicated by black dashed edge. If the lock is acquired by a process the edge is solid and blue and if a process is waiting to acquire a lock the edge is dashed and purple.
+A slightly more complex example of the four processes Albert, Bertha, Charlie and Dennis which parwise are sending the strings 'Hello' and 'Hi' back and forth. Though, before sending they are required to acquire the shared lock, lock1. A connection from a process to a lock is indicated by a black dashed edge. If the lock is acquired by a process the edge is solid and blue and if a process is waiting to acquire a lock the edge is dashed and purple.
 
 ### Example 3:
 
-![alt text](https://github.com/kbobkpop/vprocesses/blob/master/examples/select/Tick_0.png?raw=true)
-![alt text](https://github.com/kbobkpop/vprocesses/blob/master/examples/select/Tick_1.png?raw=true)
-![alt text](https://github.com/kbobkpop/vprocesses/blob/master/examples/select/Tick_2.png?raw=true)
+![alt text](https://github.com/kbobkpop/vprocesses/blob/master/examples/complex/Tock_0.png?raw=true)
+![alt text](https://github.com/kbobkpop/vprocesses/blob/master/examples/complex/Tick_1.png?raw=true)
+![alt text](https://github.com/kbobkpop/vprocesses/blob/master/examples/complex/Tock_1.png?raw=true)
+![alt text](https://github.com/kbobkpop/vprocesses/blob/master/examples/complex/Tick_2.png?raw=true)
 
-In this example the node s1 is waiting at a select call in tick 1, indiciated by the dashed red outline, until something is on one of the channels leading towards it, which there is in second tick.
+In this example the nodes Slct1, Slct2 and Slct3 all contain a VSelect.select(), which are their first synchronization poing. Slct3 is blocking at that call to .select() which is indicated by the red dashed outline of the node. Because Slct1 and Slct2 have data on an incoming channel their select call returns before the end of Tick 1, and instead they are blocking on their subsequent .recv() call.
 
 All examples and more can be found in the examples directory.
