@@ -635,9 +635,9 @@ class VProcess(multiprocessing.Process):
                 self.locks.append(arg)
             if isinstance(arg, list):
                 for elm in arg:
-                    if isinstance(arg, VConnection):
+                    if isinstance(elm, VConnection):
                         self.connections.append(elm)
-                    if isinstance(arg, VLock):
+                    if isinstance(elm, VLock):
                         self.locks.append(elm)
 
     def setup_manager_connection(self):

@@ -84,6 +84,57 @@ To install graphviz 0.20.3 use pip to install:
 
 <code>$ pip install graphviz</code>
 
+### Nodes & Edges
+
+#### Nodes
+<table>
+    <tr>
+        <td><img style="float: left;" src="nodes_edges_images/red_node.png"></td>
+        <td>A node with a red outline is a process which is blocking when sending or receiving.</td>
+    </tr>
+    <tr>
+        <td><img style="float: left;" src="nodes_edges_images/green_node.png"></td>
+        <td>A node with a green outline is a process which is able, i.e. not blocking.</td>
+    </tr>
+    <tr>
+        <td><img style="float: left;" src="nodes_edges_images/purple_node.png"></td>
+        <td>A node with a purple dashed outline is a process which is blocking when waiting to acquire a lock.</td>
+    </tr>
+    <tr>
+        <td><img style="float: left;" src="nodes_edges_images/red_dashed_node.png"></td>
+        <td>A node with a red dashed outline is a process which is blocking at a call to .select().</td>
+    </tr>
+    <tr>
+        <td><img style="float: left;" src="nodes_edges_images/lock_node.png"></td>
+        <td>A square node with a black outline is a lock.</td>
+    </tr>
+</table>
+
+#### Edges
+<table>
+    <tr>
+        <td><img style="float: left;" src="nodes_edges_images/edge_channel.png"></td>
+        <td>A directed edge is a channel with the receiving end being where the arrowhead is and the sending side being the opposite end.</td>
+    </tr>
+    <tr>
+        <td><img style="float: left;" src="nodes_edges_images/edge_data.png"></td>
+        <td>A directed edge with a label next to it is a channel where some data is being sent.</td>
+    </tr>
+    <tr>
+        <td><img style="float: left;" src="nodes_edges_images/black_dashed_edge.png"></td>
+        <td>An undirected black dashed edge indicates that a process has a relationship to a lock, but the process has not currently acquired the lock nor is it waiting to acquire the lock. </td>
+    </tr>
+    <tr>
+        <td><img style="float: left;" src="nodes_edges_images/blue_edge.png"></td>
+        <td>An undirected blue edge indicates that a process has acquired the lock at the other end of the edge.</td>
+    </tr>
+    <tr>
+        <td><img style="float: left;" src="nodes_edges_images/purple_edge.png"></td>
+        <td>An undirected dashed purple edge indicates that a process is waiting to acquire the lock at the other end of the edge.</td>
+    </tr>
+</table>
+
+
 ### Example 1:
 
 ![alt text](https://github.com/kbobkpop/vprocesses/blob/master/examples/producerConsumer/0_Tock.png?raw=true)
@@ -104,11 +155,11 @@ A slightly more complex example of the four processes Albert, Bertha, Charlie an
 
 ### Example 3:
 
-![alt text](https://github.com/kbobkpop/vprocesses/blob/master/examples/complex/0_Tockpng?raw=true)
+![alt text](https://github.com/kbobkpop/vprocesses/blob/master/examples/complex/0_Tock.png?raw=true)
 ![alt text](https://github.com/kbobkpop/vprocesses/blob/master/examples/complex/1_Tick.png?raw=true)
 ![alt text](https://github.com/kbobkpop/vprocesses/blob/master/examples/complex/1_Tock.png?raw=true)
 ![alt text](https://github.com/kbobkpop/vprocesses/blob/master/examples/complex/2_Tick.png?raw=true)
 
-In this example the nodes Slct1, Slct2 and Slct3 all contain a VSelect.select(), which are their first synchronization poing. Slct3 is blocking at that call to .select() which is indicated by the red dashed outline of the node. Because Slct1 and Slct2 have data on an incoming channel their select call returns before the end of Tick 1, and instead they are blocking on their subsequent .recv() call.
+In this example the nodes Slct1, Slct2 and Slct3 all contain a VSelect.select(), which are their first synchronization point. Slct3 is blocking at that call to .select() which is indicated by the red dashed outline of the node. Because Slct1 and Slct2 have data on an incoming channel their select call returns before the end of Tick 1, and instead they are blocking on their subsequent .recv() call.
 
 All examples and more can be found in the examples directory.
