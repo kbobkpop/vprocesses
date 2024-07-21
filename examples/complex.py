@@ -36,7 +36,7 @@ def selectSharedLockTwoLockedProducersTwoConsumers(conn1, conn2, conn3, conn4, l
             data1 = conn1.recv()
         elif conn2 in inputs:
             data2 = conn2.recv()
-        
+
         if data1 != None:
             lock1.acquire()
             conn3.send(data1)
@@ -65,57 +65,57 @@ p10, c10 = multiprocessing.Pipe()
 
 processes = [
         multiprocessing.Process(
-            target=lockedProducer, 
+            target=lockedProducer,
             args=(p1,vlock2, 2),
             name="p1"
         ),
         multiprocessing.Process(
-            target=lockedProducer, 
+            target=lockedProducer,
             args=(p2,vlock2, 2),
             name="p2"
         ),
         multiprocessing.Process(
-            target=lockedProducer, 
+            target=lockedProducer,
             args=(p3,vlock3, 2),
             name="p3"
         ),
         multiprocessing.Process(
-            target=lockedProducer, 
+            target=lockedProducer,
             args=(p4,vlock3, 2),
             name="p4"
         ),
         multiprocessing.Process(
-            target=selectSharedLockTwoLockedProducersTwoConsumers, 
+            target=selectSharedLockTwoLockedProducersTwoConsumers,
             args=(c1, c2, p5, p6, vlock1, vlock5, 2),
             name="Slct1"
         ),
         multiprocessing.Process(
-            target=selectSharedLockTwoLockedProducersTwoConsumers, 
+            target=selectSharedLockTwoLockedProducersTwoConsumers,
             args=(c3, c4, p7, p8, vlock4, vlock5, 2),
             name="Slct2"
         ),
         multiprocessing.Process(
-            target=selectSharedLockTwoLockedProducersTwoConsumers, 
+            target=selectSharedLockTwoLockedProducersTwoConsumers,
             args=(c6, c7, p9, p10, vlock1, vlock4, 2),
             name="Slct3"
         ),
         multiprocessing.Process(
-            target=consumer, 
+            target=consumer,
             args=(c5, 2),
             name="c1"
         ),
         multiprocessing.Process(
-            target=consumer, 
+            target=consumer,
             args=(c9, 2),
             name="c2"
         ),
         multiprocessing.Process(
-            target=consumer, 
+            target=consumer,
             args=(c10, 2),
             name="c3"
         ),
         multiprocessing.Process(
-            target=consumer, 
+            target=consumer,
             args=(c8, 2),
             name="c4"
         )
@@ -124,6 +124,6 @@ processes = [
 connections = [p1, c1, p2, c2, p3, c3, p4, c4, p5, c5, p6, c6, p7, c7, p8, c8, p9, c9, p10, c10]
 locks = [vlock1, vlock2, vlock3, vlock4, vlock5]
 
-vm = VManager(processes, connections, locks, outputFormat='png', tickTock=True)
+vm = VManager(processes, connections, locks, output_format='png', tick_tock=True)
 vm.start()
-vm.runTicksToEnd(processes)
+vm.run_ticks_to_end(processes)

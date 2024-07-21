@@ -13,7 +13,7 @@ from vprocesses import VSelect as select
 def producer(conn, iterations):
     for i in range(iterations):
         conn.send(i)
-        
+
 def consumer(conn, iterations):
     for i in range(iterations):
         data = conn.recv()
@@ -45,6 +45,6 @@ processes = [multiprocessing.Process(target=producer, args=(p1, 2), name="p1"),
 
 channels = [p1, c1, p2, c2, p3, c3, p4, c4, p5, c5, p6, c6]
 
-vm = VManager(processes, channels, outputFormat='png')
+vm = VManager(processes, channels, output_format='png')
 vm.start()
-vm.runTicksToEnd(processes)
+vm.run_ticks_to_end(processes)

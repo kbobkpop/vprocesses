@@ -33,25 +33,25 @@ pipe_1_in, pipe_1_out  = multiprocessing.Pipe()
 pipe_2_in, pipe_2_out  = multiprocessing.Pipe()
 pipe_3_in, pipe_3_out  = multiprocessing.Pipe()
 pipe_4_in, pipe_4_out  = multiprocessing.Pipe()
-    
+
 processes = [
     multiprocessing.Process(
-        target=lockedPingPong, 
+        target=lockedPingPong,
         args=(vlock, pipe_1_in, pipe_2_out, 1, "hello"),
         name="Albert"
     ),
     multiprocessing.Process(
-        target=lockedPingPong, 
+        target=lockedPingPong,
         args=(vlock, pipe_2_in, pipe_1_out, 1),
         name="Bertha"
     ),
     multiprocessing.Process(
-        target=lockedPingPong, 
+        target=lockedPingPong,
         args=(vlock, pipe_3_in, pipe_4_out, 1, "hi"),
         name="Cindy"
     ),
     multiprocessing.Process(
-        target=lockedPingPong, 
+        target=lockedPingPong,
         args=(vlock, pipe_4_in, pipe_3_out, 1),
         name="Dennis"
     )
@@ -70,6 +70,6 @@ channels = [
     pipe_4_out
 ]
 
-vm = VManager(processes, channels, vlock, outputFormat='png')
+vm = VManager(processes, channels, vlock, output_format='png')
 vm.start()
-vm.runTicksToEnd(processes)
+vm.run_ticks_to_end(processes)

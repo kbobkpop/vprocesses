@@ -1,0 +1,16 @@
+digraph {
+	label="Tick 7" labelloc=t
+	p1 [label=p1 color=red style=solid]
+	p2 [label=p2 color=red style=solid]
+	p3 [label=p3 color=red style=solid]
+	s1 [label=s1 color=red style=solid]
+	c1 [label=c1 color=red style=solid]
+	c2 [label=c2 color=red style=solid]
+	c3 [label=c3 color=red style=solid]
+	p1 -> s1 [label=1]
+	p2 -> s1 [label=1]
+	p3 -> s1 [label=1]
+	s1 -> c1 [label=" "]
+	s1 -> c2 [label=" "]
+	s1 -> c3 [label=" "]
+}
