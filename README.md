@@ -37,11 +37,11 @@ This allows instantiating the VManager directly, without the multiprocessing pre
 
 Having instantiated a VManager, you need to call <code>.start()</code> on the object in order to initalize the graph and start the processes.
 
-You can now run a tick by calling <code>.runAllToTick()</code> with the list of processes as argument. This call returns a list of able processes which should be passed as argument for the next tick.
+You can now run a tick by calling <code>.run_all_to_tick()</code> with the list of processes as argument. This call returns a list of able processes which should be passed as argument for the next tick.
 
-You can also call <code>.stepwiseTicks()</code> also with the list of processes to interactively running ticks by pressing 'enter' after each tick.
+You can also call <code>.stepwise_ticks()</code> also with the list of processes to interactively running ticks by pressing 'enter' after each tick.
 
-If you have set up your processes such that they terminate you can also call <code>.runTicksToEnd()</code> which will then loop through ticks until termination of all processes.
+If you have set up your processes such that they terminate you can also call <code>.run_ticks_to_end()</code> which will then loop through ticks until termination of all processes.
 
 ### Ticks
 Ticks are defined as each process reaching a synchronization point. If a process reaches a .send() call, the process will block until the other side of the channel is ready to receive by having reached a .recv() call. When both sides on a channel have reached their respective synchronization points, data will be transmitted and both processes will continue until their next synchronization points. After each process has reached a synchronization point, the manager will draw in image and allow processes to progress when possible.
